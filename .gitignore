@@ -1,0 +1,10 @@
+*~
+/build
+/target
+/vendor
+/*.json
+Thumbs.db
+.DS*
+/data
+/ssr-confs
+/bin
