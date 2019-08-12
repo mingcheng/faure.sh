@@ -9,10 +9,9 @@
 # http://www.opensource.org/licenses/MIT
 ###
 
-apt install build-essential autoconf \
+apt install -y build-essential autoconf \
   libtool libssl-dev gawk debhelper dh-systemd init-system-helpers \
   pkg-config asciidoc xmlto apg libpcre3-dev zlib1g-dev \
   libsodium-dev libev-dev libcork-dev libudns-dev
 
-apt install ipset dnsmasq supervisor proxychains
-
+apt install -y ipset dnsmasq supervisor proxychains hostapd 

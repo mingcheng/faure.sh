@@ -5,7 +5,7 @@
 # Author: Ming Cheng<mingcheng@outlook.com>
 #
 # Created Date: Monday, July 22nd 2019, 7:59:40 pm
-# Last Modified: Friday, August 9th 2019, 6:19:41 pm
+# Last Modified: Monday, August 12th 2019, 4:27:55 pm
 #
 # http://www.opensource.org/licenses/MIT
 ###
@@ -24,6 +24,7 @@ iptables -A INPUT -m state --state RELATED,ESTABLISHED -j ACCEPT
 
 iptables -t nat -N SHADOWSOCKS
 
+iptables -t nat -A SHADOWSOCKS -s 172.16.0.1 -j RETURN
 iptables -t nat -A SHADOWSOCKS -d 0.0.0.0 -j RETURN
 iptables -t nat -A SHADOWSOCKS -d 0.0.0.0/254.0.0.0 -j RETURN
 iptables -t nat -A SHADOWSOCKS -d 0.0.0.0/8 -j RETURN
@@ -45,9 +46,10 @@ iptables -t nat -A SHADOWSOCKS -p tcp -j RETURN
 iptables -t nat -A PREROUTING -p tcp -j SHADOWSOCKS
 iptables -t nat -A OUTPUT -p tcp -j SHADOWSOCKS
 
-iptables -t nat -A POSTROUTING -o br0 -j MASQUERADE
-iptables -t nat -A POSTROUTING -o eth1 -j MASQUERADE
-iptables -t nat -A POSTROUTING -o wlan0 -j MASQUERADE
+# iptables -t nat -A POSTROUTING -o br0 -j MASQUERADE
+iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE
+# iptables -t nat -A POSTROUTING -o eth1 -j MASQUERADE
+# iptables -t nat -A POSTROUTING -o wlan0 -j MASQUERADE
 
 # Use iptables to anti-dns poison on linux or openwrt
 # 	@from https://gist.github.com/scola/eed6772117df7eccd560
