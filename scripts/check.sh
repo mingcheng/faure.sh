@@ -4,7 +4,7 @@
 # Author: Ming Cheng<mingcheng@outlook.com>
 #
 # Created Date: Thursday, August 15th 2019, 2:17:58 pm
-# Last Modified: Thursday, August 15th 2019, 2:31:34 pm
+# Last Modified: Thursday, August 15th 2019, 3:07:38 pm
 #
 # http://www.opensource.org/licenses/MIT
 ###
@@ -26,7 +26,7 @@ else
   echo "Check Faild, $PROXY_ADDR not available"
   if [ ! -z $1 ] && [ -x $1 ]; then
     echo "Execute $1"
-    echo $1
+    $1
   fi
   exit -1
 fi
