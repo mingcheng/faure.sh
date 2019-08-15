@@ -5,12 +5,10 @@
 # Author: Ming Cheng<mingcheng@outlook.com>
 #
 # Created Date: Tuesday, August 6th 2019, 5:00:44 pm
-# Last Modified: Friday, August 9th 2019, 6:16:47 pm
+# Last Modified: Tuesday, August 13th 2019, 11:15:29 am
 #
 # http://www.opensource.org/licenses/MIT
 ###
-
-
 
 iptables -t nat -A PREROUTING -i eth1 -p tcp --dport 80 -j DNAT --to-destination 172.16.0.1
 iptables -t nat -A PREROUTING -i eth1 -p tcp --dport 80 -j DNAT --to-destination 172.16.0.250

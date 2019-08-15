@@ -5,7 +5,7 @@
 # Author: Ming Cheng<mingcheng@outlook.com>
 #
 # Created Date: Monday, July 22nd 2019, 7:59:40 pm
-# Last Modified: Monday, August 12th 2019, 4:27:55 pm
+# Last Modified: Tuesday, August 13th 2019, 11:13:02 am
 #
 # http://www.opensource.org/licenses/MIT
 ###
@@ -40,11 +40,14 @@ iptables -t nat -A SHADOWSOCKS -d 240.0.0.0/4 -j RETURN
 iptables -t nat -A SHADOWSOCKS -d 8.8.0.0/16 -j RETURN
 
 iptables -t nat -A SHADOWSOCKS -p tcp -m set --match-set gfwlist dst -j REDIRECT --to-port 8848
-iptables -t nat -A SHADOWSOCKS -p tcp -m set --match-set chnroute dst -j RETURN
+iptables -t nat -A SHADOWSOCKS -p udp -m set --match-set gfwlist dst -j REDIRECT --to-port 8848
+iptables -t nat -A SHADOWSOCKS -p icmp -m set --match-set gfwlist dst -j REDIRECT --to-port 8848
+# iptables -t nat -A SHADOWSOCKS -p tcp -m set --match-set chnroute dst -j RETURN
 iptables -t nat -A SHADOWSOCKS -p tcp -j RETURN
 
-iptables -t nat -A PREROUTING -p tcp -j SHADOWSOCKS
-iptables -t nat -A OUTPUT -p tcp -j SHADOWSOCKS
+iptables -t nat -A PREROUTING -j SHADOWSOCKS
+iptables -t nat -A OUTPUT -j SHADOWSOCKS
+iptables -t nat -A FORWARD -j SHADOWSOCKS
 
 # iptables -t nat -A POSTROUTING -o br0 -j MASQUERADE
 iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE
