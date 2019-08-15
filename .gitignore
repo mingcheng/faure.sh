@@ -1,10 +1,10 @@
 *~
-/build
-/target
-/vendor
-/*.json
-Thumbs.db
 .DS*
+/*.json
+/bin
+/build
 /data
 /ssr-confs
-/bin
+/target
+/vendor
+Thumbs.db
