@@ -8,6 +8,6 @@
  * http://www.opensource.org/licenses/MIT
  */
 {
-  "workbench.colorTheme": "Default Light+",
+  "workbench.colorTheme": "Visual Studio Dark",
   "files.associations": {}
 }
