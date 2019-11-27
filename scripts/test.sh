@@ -1,11 +1,10 @@
 #!/usr/bin/env bash
-
 ###
 # File: test.sh
 # Author: Ming Cheng<mingcheng@outlook.com>
 #
 # Created Date: Wednesday, July 24th 2019, 2:14:28 pm
-# Last Modified: Wednesday, July 24th 2019, 2:15:06 pm
+# Last Modified: Thursday, August 15th 2019, 2:17:48 pm
 #
 # http://www.opensource.org/licenses/MIT
 ###

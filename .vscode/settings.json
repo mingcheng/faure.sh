@@ -1,0 +1,13 @@
+/*
+ * File: settings.json
+ * Author: Ming Cheng<mingcheng@outlook.com>
+ *
+ * Created Date: Thursday, June 27th 2019, 9:55:59 am
+ * Last Modified: Thursday, June 27th 2019, 9:59:33 am
+ *
+ * http://www.opensource.org/licenses/MIT
+ */
+{
+  "workbench.colorTheme": "Default Light+",
+  "files.associations": {}
+}
