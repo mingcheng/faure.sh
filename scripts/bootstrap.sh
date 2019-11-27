@@ -22,7 +22,7 @@ fi
 $FAURE_HOME/scripts/redirect.sh
 
 if [ -x $FAURE_HOME/scripts/dump-ipsets.sh ]; then
-	$FAURE_HOME/scripts/dump-ipsets.sh
+  $FAURE_HOME/scripts/dump-ipsets.sh
 fi
 
 exit 0
