@@ -9,8 +9,8 @@
 # http://www.opensource.org/licenses/MIT
 ###
 
-CONFIGS_DIR="$HOME/faure.sh/ssr-confs"
-TARGET_CONFIG="$HOME/faure.sh/data/shadowsocksr.json"
+CONFIGS_DIR="$HOME/ssr-confs"
+TARGET_CONFIG="$HOME/shadowsocksr.json"
 
 files=($CONFIGS_DIR/*.json)
 target_file=$(printf "%s\n" "${files[RANDOM % ${#files[@]}]}")
