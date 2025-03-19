@@ -1,0 +1,22 @@
+services:
+  mihomo:
+    image: metacubex/mihomo:latest
+    container_name: mihomo
+    environment:
+      TZ: "Asia/Shanghai"
+    dns:
+      - 1.1.1.1
+    volumes:
+      - ./config:/root/.config/mihomo
+      - ./ui:/ui:ro
+    privileged: true
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun
+    restart: unless-stopped
+    network_mode: host
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "512m"

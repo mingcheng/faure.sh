@@ -1,0 +1,37 @@
+#!#
+# Copyright (c) 2025 Hangzhou Guanwaii Technology Co,.Ltd.
+#
+# This source code is licensed under the MIT License,
+# which is located in the LICENSE file in the source tree's root directory.
+#
+# File: compose.yaml
+# Author: mingcheng (mingcheng@apache.org)
+# File Created: 2025-03-19 14:34:01
+#
+# Modified By: mingcheng (mingcheng@apache.org)
+# Last Modified: 2025-03-19 16:03:27
+##
+
+services:
+  adguardhome:
+    image: adguard/adguardhome
+    container_name: adguardhome
+    environment:
+      TZ: "Asia/Shanghai"
+    dns:
+      - 1.1.1.1
+    network_mode: host
+    volumes:
+      - ./work:/opt/adguardhome/work
+      - ./conf:/opt/adguardhome/conf
+      - /tmp:/tmp
+    restart: unless-stopped
+    privileged: true
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "512m"
