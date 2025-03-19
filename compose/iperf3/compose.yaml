@@ -5,7 +5,7 @@ services:
     restart: unless-stopped
     ports:
       - 5201:5201
-    command: [ -s ]
+    command: [-s]
     healthcheck:
       test: ["CMD", "iperf3", "-c", "localhost"]
       interval: 10m

@@ -9,7 +9,7 @@
 # File Created: 2025-03-19 14:34:01
 #
 # Modified By: mingcheng (mingcheng@apache.org)
-# Last Modified: 2025-03-19 16:03:27
+# Last Modified: 2025-04-02 11:45:04
 ##
 
 services:
@@ -37,7 +37,14 @@ services:
       options:
         max-size: "512m"
     healthcheck:
-      test: ["CMD", "/opt/adguardhome/AdGuardHome", "--check-config", "-c", "/opt/adguardhome/conf/AdGuardHome.yaml"]
+      test:
+        [
+          "CMD",
+          "/opt/adguardhome/AdGuardHome",
+          "--check-config",
+          "-c",
+          "/opt/adguardhome/conf/AdGuardHome.yaml",
+        ]
       interval: 60s
       timeout: 3s
       start_period: 30s
