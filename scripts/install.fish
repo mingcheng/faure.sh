@@ -9,7 +9,7 @@
 # File Created: 2025-03-20 10:01:34
 #
 # Modified By: mingcheng (mingcheng@apache.org)
-# Last Modified: 2025-03-20 14:35:52
+# Last Modified: 2025-04-02 12:10:34
 ##
 
 # check if running as root
@@ -24,15 +24,21 @@ if test (uname -s | string lower) != linux
     exit 1
 end
 
+# detect if the system is Debian-based
+if not test -f /etc/debian_version
+    echo "This script only supports Debian-based systems"
+    exit 1
+end
+
 # update the install the nested packages
 apt update && apt install stow -y
 
-# echo "stow -t /etc -d $PWD apt, install apt config"
-# stow -t /etc/apt apt
-# if test $status -ne 0
-#    echo "stow failed"
-#    exit 1
-# end
+echo "stow -t /etc -d $PWD apt, install apt config"
+stow -t /etc/apt apt
+if test $status -ne 0
+    echo "stow failed"
+    exit 1
+end
 
 echo "update and upgrade system, by using the new apt config"
 apt update && apt upgrade -y

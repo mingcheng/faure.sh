@@ -9,7 +9,7 @@
 # File Created: 2025-03-19 14:32:47
 #
 # Modified By: mingcheng (mingcheng@apache.org)
-# Last Modified: 2025-03-19 14:32:55
+# Last Modified: 2025-04-02 12:12:00
 ##
 
 set -gx FAURE_ADDR_RANGE "192.168.0.0/16"
@@ -25,6 +25,7 @@ iptables -t nat -A CLASH -p icmp -j REDIRECT --to-port 8848
 iptables -t nat -A PREROUTING -j CLASH
 iptables -t nat -A POSTROUTING -o $FAURE_INTERFACE -j MASQUERADE
 
+# block the external tcp request
 function block_port -d "firewall rules to block the external tcp request"
     iptables -I DOCKER-USER ! -s $FAURE_ADDR_RANGE -p tcp -m conntrack --ctorigdstport $argv[1] --ctdir ORIGINAL -j DROP
     iptables -I DOCKER-USER ! -s $FAURE_ADDR_RANGE -p udp -m conntrack --ctorigdstport $argv[1] --ctdir ORIGINAL -j DROP
@@ -32,9 +33,11 @@ function block_port -d "firewall rules to block the external tcp request"
     iptables -I INPUT -i $FAURE_INTERFACE -p udp --dport $argv[1] ! -s $FAURE_ADDR_RANGE -j DROP
 end
 
+# block the external tcp request by port
 for x in 22 53 80 443 1080 1086 3000 3389 3551 5200 5201 5353 7890 8848 8849 8080 9100 9090
     block_port $x
 end
 
+# redirect dns request to local dns
 iptables -t nat -A PREROUTING -s $FAURE_ADDR_RANGE -p udp --dport 53 -j REDIRECT --to-ports 53
 iptables -t nat -A PREROUTING -s $FAURE_ADDR_RANGE -p tcp --dport 53 -j REDIRECT --to-ports 53
