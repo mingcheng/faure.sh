@@ -1,23 +1,10 @@
-/*
- * Copyright (c) 2025 Hangzhou Guanwaii Technology Co,.Ltd.
- *
- * This source code is licensed under the MIT License,
- * which is located in the LICENSE file in the source tree's root directory.
- *
- * File: settings.json
- * Author: mingcheng (mingcheng@apache.org)
- * File Created: Thursday, June 27th 2019, 9:55:59 am
- *
- * Modified By: mingcheng (mingcheng@apache.org)
- * Last Modified: 2025-03-19 14:27:04
- */
 {
   "files.associations": {
     "*.yaml_": "yaml",
     "*.json_": "json",
     "*.yml_": "yaml"
   },
-  "editor.fontSize": 13,
+  "editor.fontSize": 12,
   "editor.tabSize": 2,
   "editor.wordWrap": "on",
   "editor.formatOnSave": true,
