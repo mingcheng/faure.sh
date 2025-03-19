@@ -18,6 +18,12 @@ if test (id -u) -ne 0
     exit 1
 end
 
+# check if running on Linux
+if test (uname -s | string lower) != linux
+    echo "This script only supports Linux"
+    exit 1
+end
+
 # add Docker's official GPG key:
 apt update && apt install -y apt-transport-https ca-certificates curl gnupg lsb-release
 install -m 0755 -d /etc/apt/keyrings

@@ -18,6 +18,12 @@ if test (id -u) -ne 0
     exit 1
 end
 
+# check if running on Linux
+if test (uname -s | string lower) != linux
+    echo "This script only supports Linux"
+    exit 1
+end
+
 # update the install the nested packages
 apt update && apt install stow -y
 
