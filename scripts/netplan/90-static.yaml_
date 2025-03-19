@@ -1,0 +1,33 @@
+#!#
+# Copyright (c) 2025 Hangzhou Guanwaii Technology Co,.Ltd.
+#
+# This source code is licensed under the MIT License,
+# which is located in the LICENSE file in the source tree's root directory.
+#
+# File: 90-default.yaml
+# Author: mingcheng (mingcheng@apache.org)
+# File Created: 2025-03-20 10:36:33
+#
+# Modified By: mingcheng (mingcheng@apache.org)
+# Last Modified: 2025-03-20 10:39:54
+##
+
+network:
+  ethernets:
+    mainif:
+      match:
+        driver: virtio_net
+      # renderer: NetworkManager
+      renderer: networkd
+      set-name: eth0
+      dhcp4: false
+      dhcp6: false
+      addresses:
+        - 192.168.0.254/24
+      routes:
+        - to: default
+          via: 192.168.0.1
+      nameservers:
+        addresses:
+          - 192.168.0.1
+  version: 2
