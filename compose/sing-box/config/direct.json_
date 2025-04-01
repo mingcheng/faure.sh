@@ -1,0 +1,40 @@
+{
+  "dns": {
+    "final": "localhost",
+    "servers": [
+      {
+        "address": "192.168.1.254",
+        "tag": "localhost"
+      }
+    ],
+    "strategy": "prefer_ipv4"
+  },
+  "inbounds": [
+    {
+      "listen": "192.168.1.254",
+      "listen_port": 7890,
+      "set_system_proxy": false,
+      "tag": "mixed-in-main",
+      "type": "mixed"
+    },
+    {
+      "listen": "::",
+      "listen_port": 8848,
+      "tag": "redirect-in",
+      "type": "redirect"
+    }
+  ],
+  "log": {
+    "disabled": false,
+    "level": "debug"
+  },
+  "outbounds": [
+    {
+      "tag": "direct",
+      "type": "direct"
+    }
+  ],
+  "route": {
+    "final": "direct"
+  }
+}

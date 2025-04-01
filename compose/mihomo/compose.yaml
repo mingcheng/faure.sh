@@ -1,6 +1,6 @@
 services:
   mihomo:
-    image: metacubex/mihomo:latest
+    image: docker.1ms.run/metacubex/mihomo
     container_name: mihomo
     environment:
       TZ: "Asia/Shanghai"
@@ -9,6 +9,8 @@ services:
     volumes:
       - ./config:/root/.config/mihomo
       - ./ui:/ui:ro
+    tmpfs:
+      - /tmp:size=128m,mode=1777
     privileged: true
     cap_add:
       - NET_ADMIN

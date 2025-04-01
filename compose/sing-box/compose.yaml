@@ -7,8 +7,10 @@ services:
     volumes:
       - ./config:/etc/sing-box
       - ./var:/var/lib/sing-box
+    tmpfs:
+      - /tmp:size=128m,mode=1777
     dns:
-      - 1.1.1.1
+      - 114.114.114.114
     privileged: true
     cap_add:
       - NET_ADMIN
@@ -16,8 +18,14 @@ services:
       - /dev/net/tun
     restart: unless-stopped
     network_mode: host
-    command: -D /var/lib/sing-box -C /etc/sing-box/ run
+    command: -D /var/lib/sing-box -C /etc/sing-box run
     logging:
       driver: "json-file"
       options:
         max-size: "512m"
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "8848"]
+      interval: 60s
+      timeout: 5s
+      retries: 3
+      start_period: 30s

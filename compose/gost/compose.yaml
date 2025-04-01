@@ -14,11 +14,11 @@
 
 services:
   gost:
-    image: gogost/gost
+    image: docker.1ms.run/gogost/gost
     container_name: gost
     restart: always
     dns:
-      - 1.1.1.1
+      - 114.114.114.114
     network_mode: "host"
     volumes:
       - ./config.yaml:/etc/gost/gost.yml:ro

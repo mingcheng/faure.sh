@@ -27,12 +27,12 @@ end
 # update the install the nested packages
 apt update && apt install stow -y
 
-echo "stow -t /etc -d $PWD apt, install apt config"
-stow -t /etc/apt apt
-if test $status -ne 0
-    echo "stow failed"
-    exit 1
-end
+# echo "stow -t /etc -d $PWD apt, install apt config"
+# stow -t /etc/apt apt
+# if test $status -ne 0
+#    echo "stow failed"
+#    exit 1
+# end
 
 echo "update and upgrade system, by using the new apt config"
 apt update && apt upgrade -y

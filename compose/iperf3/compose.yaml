@@ -1,0 +1,14 @@
+services:
+  iperf3:
+    image: docker.1ms.run/networkstatic/iperf3
+    container_name: iperf3
+    restart: unless-stopped
+    ports:
+      - 5201:5201
+    command: [ -s ]
+    healthcheck:
+      test: ["CMD", "iperf3", "-c", "localhost"]
+      interval: 10m
+      timeout: 1m
+      retries: 3
+      start_period: 5s
