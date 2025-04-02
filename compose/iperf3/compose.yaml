@@ -6,9 +6,3 @@ services:
     ports:
       - 5201:5201
     command: [-s]
-    healthcheck:
-      test: ["CMD", "iperf3", "-c", "localhost"]
-      interval: 10m
-      timeout: 1m
-      retries: 3
-      start_period: 5s

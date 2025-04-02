@@ -8,7 +8,7 @@ services:
       - ./config:/etc/sing-box
       - ./var:/var/lib/sing-box
     tmpfs:
-      - /tmp:size=128m,mode=1777
+      - /tmp:size=512m,mode=1777
     dns:
       - 114.114.114.114
     privileged: true
@@ -24,7 +24,7 @@ services:
       options:
         max-size: "512m"
     healthcheck:
-      test: ["CMD", "nc", "-z", "localhost", "8848"]
+      test: ["CMD", "nc", "-z", "localhost", "8849"]
       interval: 60s
       timeout: 5s
       retries: 3

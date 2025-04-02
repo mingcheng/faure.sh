@@ -18,6 +18,12 @@
       "type": "mixed"
     },
     {
+      "type": "tproxy",
+      "tag": "tproxy-in",
+      "listen": "::",
+      "listen_port": 8849
+    },
+    {
       "listen": "::",
       "listen_port": 8848,
       "tag": "redirect-in",

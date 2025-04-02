@@ -9,21 +9,30 @@
 # File Created: 2025-03-19 14:32:47
 #
 # Modified By: mingcheng (mingcheng@apache.org)
-# Last Modified: 2025-04-02 12:12:00
+# Last Modified: 2025-04-03 10:01:01
 ##
 
+# modify the FAURE_ADDR_RANGE and FAURE_INTERFACE to your own
 set -gx FAURE_ADDR_RANGE "192.168.0.0/16"
 set -gx FAURE_INTERFACE eth0
 
-# https://zhuanlan.zhihu.com/p/423684520
-iptables -t nat -N CLASH
-iptables -t nat -A CLASH -d 127.0.0.0/8 -j RETURN
-iptables -t nat -A CLASH -d $FAURE_ADDR_RANGE -j RETURN
-iptables -t nat -I CLASH -p udp -j RETURN
-iptables -t nat -A CLASH -p tcp -j REDIRECT --to-port 8848
-iptables -t nat -A CLASH -p icmp -j REDIRECT --to-port 8848
-iptables -t nat -A PREROUTING -j CLASH
-iptables -t nat -A POSTROUTING -o $FAURE_INTERFACE -j MASQUERADE
+# set the tproxy chain to the mangle table
+iptables -t mangle -N SINGBOX_TPROXY
+iptables -t mangle -I SINGBOX_TPROXY -d 0.0.0.0/8 -j RETURN
+iptables -t mangle -I SINGBOX_TPROXY -d 127.0.0.0/8 -j RETURN
+iptables -t mangle -I SINGBOX_TPROXY -d 172.16.0.0/12 -j RETURN
+iptables -t mangle -I SINGBOX_TPROXY -d $FAURE_ADDR_RANGE -j RETURN
+iptables -t mangle -A SINGBOX_TPROXY -p tcp -j MARK --set-mark 0x1
+iptables -t mangle -A SINGBOX_TPROXY -p tcp -j TPROXY \
+    --tproxy-mark 0x1/0x1 --on-port 8849
+iptables -t mangle -A SINGBOX_TPROXY -p udp -j MARK --set-mark 0x1
+iptables -t mangle -A SINGBOX_TPROXY -p udp -j TPROXY \
+    --tproxy-mark 0x1/0x1 --on-port 8849
+iptables -t mangle -A PREROUTING -j SINGBOX_TPROXY
+
+# set the rule to route the tproxy packet
+ip rule add fwmark 0x1 iif $FAURE_INTERFACE lookup 100
+ip route add local 0.0.0.0/0 dev lo table 100
 
 # block the external tcp request
 function block_port -d "firewall rules to block the external tcp request"
