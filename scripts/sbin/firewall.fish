@@ -13,15 +13,15 @@
 ##
 
 # modify the FAURE_ADDR_RANGE and FAURE_INTERFACE to your own
-set -gx FAURE_ADDR_RANGE "192.168.0.0/16"
+set -gx FAURE_ADDR_RANGE "172.16.1.0/16"
 set -gx FAURE_INTERFACE eth0
 
 # set the tproxy chain to the mangle table
 iptables -t mangle -N SINGBOX_TPROXY
 iptables -t mangle -I SINGBOX_TPROXY -d 0.0.0.0/8 -j RETURN
 iptables -t mangle -I SINGBOX_TPROXY -d 127.0.0.0/8 -j RETURN
-iptables -t mangle -I SINGBOX_TPROXY -d 172.16.0.0/12 -j RETURN
 iptables -t mangle -I SINGBOX_TPROXY -d $FAURE_ADDR_RANGE -j RETURN
+    --tproxy-mark 0x1/0x1 --on-port 8849
 iptables -t mangle -A SINGBOX_TPROXY -p tcp -j MARK --set-mark 0x1
 iptables -t mangle -A SINGBOX_TPROXY -p tcp -j TPROXY \
     --tproxy-mark 0x1/0x1 --on-port 8849

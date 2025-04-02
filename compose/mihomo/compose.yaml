@@ -7,11 +7,11 @@ services:
     dns:
       - 114.114.114.114
     volumes:
-      - ./config:/root/.config/mihomo
-      - ./ui:/ui:ro
+      - ./data:/etc/mihomo
     tmpfs:
       - /tmp:size=128m,mode=1777
     privileged: true
+    command: ["-d", "/etc/mihomo"]
     cap_add:
       - NET_ADMIN
     devices:
@@ -22,3 +22,9 @@ services:
       driver: "json-file"
       options:
         max-size: "512m"
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "8849"]
+      interval: 60s
+      timeout: 5s
+      retries: 3
+      start_period: 30s

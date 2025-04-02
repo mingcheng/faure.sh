@@ -6,3 +6,4 @@ compose/adguard/conf/*
 compose/adguard/work/*
 compose/sing-box/config/*.json
 compose/sing-box/var/*
+compose/mihomo/data/*
