@@ -1,9 +1,15 @@
-# The install scipts for Debian/Ubuntu
+# Scripts for Debian/Ubuntu
 
-## install.fish
+## firewall.fish
 
-The `install.fish` file offers automated methods for installing system packages and modifying kernel and system configurations.
+Configures iptables rules for transparent proxy and network traffic management. Sets up TPROXY rules and blocks external access to specified ports.
 
+**Usage:**  
+Requires: root privileges, [fish shell](https://fishshell.com/), and [iptables](https://netfilter.org/projects/iptables/index.html) installed and available in PATH.  
+Example:  
+
+```sh
+sudo fish scripts/firewall.fish
 ## install_docker.fish
 
-The simplifies the process of installing the Docker package. `install_docker.fish` It will download the signed key and install via the Aliyun repository mirror on the fly.
+Automates the Docker installation process. Downloads the signed key and installs via the Aliyun repository mirror.
