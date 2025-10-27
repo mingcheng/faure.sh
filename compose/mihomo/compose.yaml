@@ -28,3 +28,18 @@ services:
       timeout: 5s
       retries: 3
       start_period: 30s
+
+  zashboard:
+    depends_on:
+      - mihomo
+    container_name: zashboard
+    image: ghcr.io/zephyruso/zashboard
+    restart: unless-stopped
+    ports:
+      - "8080:80"
+    environment:
+      TZ: "Asia/Shanghai"
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "128m"
