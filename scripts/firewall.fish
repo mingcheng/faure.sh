@@ -15,6 +15,7 @@
 # modify the FAURE_ADDR_RANGE and FAURE_INTERFACE to your own
 set -gx FAURE_ADDR_RANGE "172.16.1.0/16"
 set -gx FAURE_INTERFACE eth0
+set -gx FAURE_TPORT 8848
 
 # cleanup function to remove existing rules
 function cleanup_firewall
@@ -34,9 +35,9 @@ iptables -t mangle -N SINGBOX_TPROXY
 iptables -t mangle -A SINGBOX_TPROXY -d 127.0.0.0/8 -j RETURN
 iptables -t mangle -A SINGBOX_TPROXY -d $FAURE_ADDR_RANGE -j RETURN
 iptables -t mangle -A SINGBOX_TPROXY -p tcp -j MARK --set-mark 0x1
-iptables -t mangle -A SINGBOX_TPROXY -p tcp -j TPROXY --tproxy-mark 0x1/0x1 --on-port 8849
+iptables -t mangle -A SINGBOX_TPROXY -p tcp -j TPROXY --tproxy-mark 0x1/0x1 --on-port $FAURE_TPORT
 iptables -t mangle -A SINGBOX_TPROXY -p udp -j MARK --set-mark 0x1
-iptables -t mangle -A SINGBOX_TPROXY -p udp -j TPROXY --tproxy-mark 0x1/0x1 --on-port 8849
+iptables -t mangle -A SINGBOX_TPROXY -p udp -j TPROXY --tproxy-mark 0x1/0x1 --on-port $FAURE_TPORT
 iptables -t mangle -A PREROUTING -j SINGBOX_TPROXY
 
 # set the rule to route the tproxy packet
