@@ -13,7 +13,7 @@
 ##
 
 # modify the FAURE_ADDR_RANGE and FAURE_INTERFACE to your own
-set -gx FAURE_ADDR_RANGE "172.16.1.0/16"
+set -gx FAURE_ADDR_RANGE "172.16.1.1/24"
 set -gx FAURE_INTERFACE eth0
 set -gx FAURE_TPORT 8848
 
@@ -43,18 +43,6 @@ iptables -t mangle -A PREROUTING -j SINGBOX_TPROXY
 # set the rule to route the tproxy packet
 ip rule add fwmark 0x1 iif $FAURE_INTERFACE lookup 100
 ip route add local 0.0.0.0/0 dev lo table 100
-
-# block the external tcp request
-function block_ports -d "firewall rules to block the external tcp/udp requests for multiple ports"
-    set ports (string join "," $argv)
-    iptables -I DOCKER-USER ! -s $FAURE_ADDR_RANGE -p tcp -m multiport --dports $ports -m conntrack --ctdir ORIGINAL -j DROP
-    iptables -I DOCKER-USER ! -s $FAURE_ADDR_RANGE -p udp -m multiport --dports $ports -m conntrack --ctdir ORIGINAL -j DROP
-    iptables -I INPUT -i $FAURE_INTERFACE -p tcp --dports $ports ! -s $FAURE_ADDR_RANGE -j DROP
-    iptables -I INPUT -i $FAURE_INTERFACE -p udp --dports $ports ! -s $FAURE_ADDR_RANGE -j DROP
-end
-
-# block the external tcp request by port
-block_ports 22 53 80 443 1080 1086 3000 3389 3551 5200 5201 5353 7890 8848 8849 8080 9100 9090
 
 # redirect dns request to local dns
 iptables -t nat -A PREROUTING -s $FAURE_ADDR_RANGE -p udp --dport 53 -j REDIRECT --to-ports 53
