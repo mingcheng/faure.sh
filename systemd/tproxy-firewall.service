@@ -1,0 +1,12 @@
+[Unit]
+Description=TPROXY Firewall Rules
+After=multipath-routing.service docker.service
+Requires=multipath-routing.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/fish /root/faure.sh/scripts/firewall.fish
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
