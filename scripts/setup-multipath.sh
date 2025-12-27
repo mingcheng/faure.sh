@@ -9,6 +9,7 @@ set -e
 # --- Configuration ---
 IF1="eth0"
 IF2="eth1"
+LAN_NET="172.16.1.0/24"
 
 # Gateway IPs (Adjust these if your gateways are different)
 GW1="172.16.1.1"
@@ -16,8 +17,8 @@ GW2="192.168.66.1"
 
 # Routing Table Names (Ensure these are defined in /etc/iproute2/rt_tables)
 # Or use numeric IDs (e.g., 101, 102)
-TABLE1="isp1"
-TABLE2="isp2"
+TABLE1="100"
+TABLE2="101"
 
 # --- Execution ---
 
@@ -41,6 +42,13 @@ fi
 echo "$IF1 IP: $IP1"
 echo "$IF2 IP: $IP2"
 
+# Detect Gateway for IF2 if possible (DHCP)
+DETECTED_GW2=$(ip route show dev $IF2 | grep default | awk '{print $3}')
+if [ -n "$DETECTED_GW2" ]; then
+    GW2=$DETECTED_GW2
+    echo "Detected GW2: $GW2"
+fi
+
 # Flush old routing table rules (preserve tproxy rules)
 echo "Flushing old routing tables..."
 ip route flush table $TABLE1 || true
@@ -63,14 +71,15 @@ ip route add default via $GW2 dev $IF2 table $TABLE2
 echo "Cleaning up old policy rules..."
 ip rule del from $IP1 table $TABLE1 priority 100 2>/dev/null || true
 ip rule del from $IP2 table $TABLE2 priority 101 2>/dev/null || true
-ip rule del from 172.16.1.0/24 table $TABLE1 priority 100 2>/dev/null || true
+# Remove the rule that forced LAN traffic to Table 1 (preventing load balancing)
+ip rule del from $LAN_NET table $TABLE1 priority 100 2>/dev/null || true
 ip rule del from 192.168.66.0/24 table $TABLE2 priority 101 2>/dev/null || true
 
 # Add new policy routing rules
 # Priority 100-101 ensures they run after TProxy rules (usually priority 99)
 echo "Adding new policy rules..."
 ip rule add from $IP1 table $TABLE1 priority 100
-ip rule add from 172.16.1.0/24 table $TABLE1 priority 100
+# We DO NOT add a rule for LAN_NET here, to allow it to fall through to main table for load balancing.
 
 ip rule add from $IP2 table $TABLE2 priority 101
 ip rule add from 192.168.66.0/24 table $TABLE2 priority 101
@@ -93,7 +102,8 @@ iptables -t mangle -F MULTIPATH_MARK
 iptables -t mangle -A MULTIPATH_MARK -j CONNMARK --restore-mark
 
 # 2. Mark packets coming from WAN interfaces (if new connection)
-iptables -t mangle -A MULTIPATH_MARK -i $IF1 -m conntrack --ctstate NEW -j MARK --set-mark $MARK1
+# Exclude LAN traffic from being marked as "WAN incoming" on IF1
+iptables -t mangle -A MULTIPATH_MARK -i $IF1 ! -s $LAN_NET -m conntrack --ctstate NEW -j MARK --set-mark $MARK1
 iptables -t mangle -A MULTIPATH_MARK -i $IF2 -m conntrack --ctstate NEW -j MARK --set-mark $MARK2
 
 # 3. Save packet mark to connection mark (if mark is set)
