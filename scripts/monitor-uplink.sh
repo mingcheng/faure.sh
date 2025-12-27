@@ -20,7 +20,13 @@ STATE_FILE="/run/uplink_status"
 get_gateway() {
     local iface=$1
     # Try to get from main table first
-    local gw=$(ip route show dev $iface | grep default | awk '{print $3}')
+    local gw=$(ip route show dev $iface default | awk '/default/ {print $3}')
+
+    # If not found in main table, check for DHCP provided gateway route (scope link proto dhcp)
+    if [ -z "$gw" ]; then
+         gw=$(ip route show dev $iface proto dhcp scope link | awk '{print $1}' | head -n 1)
+    fi
+
     if [ -z "$gw" ]; then
         # Try to get from specific tables
         if [ "$iface" == "$IF1" ]; then

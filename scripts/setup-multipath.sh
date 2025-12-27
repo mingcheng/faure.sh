@@ -25,10 +25,17 @@ get_subnet() {
 }
 
 get_gateway() {
+    local iface=$1
     # Try to find gateway in main table first
-    local gw=$(ip route show dev $1 default | awk '/default/ {print $3}')
+    local gw=$(ip route show dev $iface default | awk '/default/ {print $3}')
+
+    # If not found, check for DHCP provided gateway route (often appears as scope link proto dhcp)
+    if [ -z "$gw" ]; then
+         gw=$(ip route show dev $iface proto dhcp scope link | awk '{print $1}' | head -n 1)
+    fi
+
     # Fallback for static config if not in main table yet (e.g. defined in netplan but not applied to main)
-    if [ -z "$gw" ] && [ "$1" == "eth0" ]; then
+    if [ -z "$gw" ] && [ "$iface" == "eth0" ]; then
         echo "172.16.1.1" # Fallback for static WAN
     else
         echo "$gw"
