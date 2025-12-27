@@ -1,11 +1,10 @@
 {
-  "workbench.colorTheme": "Kimbie Dark",
   "files.associations": {
     "*.yaml_": "yaml",
     "*.json_": "json",
     "*.yml_": "yaml"
   },
-  "editor.fontSize": 14,
+  "editor.fontSize": 12,
   "editor.tabSize": 2,
   "editor.wordWrap": "on",
   "editor.formatOnSave": true,
