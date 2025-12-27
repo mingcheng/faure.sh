@@ -145,6 +145,19 @@ ip route add default scope global \
     nexthop via $GW1 dev $IF1 weight 1 \
     nexthop via $GW2 dev $IF2 weight 1
 
+# --- NAT / Masquerade ---
+# Required for:
+# 1. Traffic going out eth1 (GW2 likely doesn't know LAN route)
+# 2. Traffic going out eth0 (To ensure symmetric routing for TProxy if GW1 is on same subnet)
+echo "Configuring NAT (Masquerade)..."
+# Clean up old rules first to prevent duplicates
+iptables -t nat -D POSTROUTING -o $IF1 -j MASQUERADE 2>/dev/null || true
+iptables -t nat -D POSTROUTING -o $IF2 -j MASQUERADE 2>/dev/null || true
+
+# Add new rules
+iptables -t nat -A POSTROUTING -o $IF1 -j MASQUERADE
+iptables -t nat -A POSTROUTING -o $IF2 -j MASQUERADE
+
 # Flush routing cache to apply changes immediately
 ip route flush cache
 
