@@ -1,0 +1,11 @@
+[Unit]
+Description=Monitor Uplink Connectivity and Update Routing
+After=multipath-routing.service tproxy-firewall.service
+Requires=multipath-routing.service
+
+[Service]
+Type=oneshot
+ExecStart=/root/faure.sh/scripts/monitor-uplink.sh
+
+[Install]
+WantedBy=multi-user.target
