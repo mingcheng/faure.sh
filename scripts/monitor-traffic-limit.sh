@@ -89,8 +89,8 @@ send_warning() {
 # --- Main Logic ---
 
 # Acquire lock to prevent concurrent runs
-exec 200>"$LOCK_FILE"
-flock -n 200 || { echo "Script is already running."; exit 1; }
+exec 9>"$LOCK_FILE"
+flock -n 9 || { echo "Script is already running."; exit 1; }
 
 CURRENT_BYTES=$(get_bytes)
 CURRENT_MONTH=$(date +%Y-%m)
