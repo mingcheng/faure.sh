@@ -1,7 +1,18 @@
-#!/bin/bash
+#!/usr/bin/env bash
+# Copyright (c) 2025 Hangzhou Guanwaii Technology Co., Ltd.
 #
 # Monitor uplink status and update multipath routing
 #
+# This source code is licensed under the MIT License,
+# which is located in the LICENSE file in the source tree's root directory.
+#
+# File: monitor-uplink.sh
+# Author: mingcheng <mingcheng@apache.org>
+# File Created: 2025-12-27 22:40:47
+#
+# Modified By: mingcheng <mingcheng@apache.org>
+# Last Modified: 2025-12-28 11:20:57
+##
 
 # Configuration
 IF1="eth0"

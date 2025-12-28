@@ -1,7 +1,18 @@
-#!/bin/bash
+#!/usr/bin/env bash
+# Copyright (c) 2025 Hangzhou Guanwaii Technology Co., Ltd.
 #
 # Setup multipath routing for load balancing between two interfaces
 #
+# This source code is licensed under the MIT License,
+# which is located in the LICENSE file in the source tree's root directory.
+#
+# File: setup-multipath.sh
+# Author: mingcheng <mingcheng@apache.org>
+# File Created: 2025-12-27 23:13:18
+#
+# Modified By: mingcheng <mingcheng@apache.org>
+# Last Modified: 2025-12-28 11:21:44
+##
 
 # Exit on error
 set -e

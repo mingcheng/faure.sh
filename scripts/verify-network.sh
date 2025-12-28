@@ -1,7 +1,18 @@
-#!/bin/bash
+#!/usr/bin/env bash
+# Copyright (c) 2025 Hangzhou Guanwaii Technology Co., Ltd.
 #
 # Verify network configuration for multipath routing and TProxy
 #
+# This source code is licensed under the MIT License,
+# which is located in the LICENSE file in the source tree's root directory.
+#
+# File: verify-network.sh
+# Author: mingcheng <mingcheng@apache.org>
+# File Created: 2025-12-27 23:53:23
+#
+# Modified By: mingcheng <mingcheng@apache.org>
+# Last Modified: 2025-12-28 11:21:32
+##
 
 # Colors
 GREEN='\033[0;32m'
