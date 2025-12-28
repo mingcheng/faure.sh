@@ -1,17 +1,17 @@
 #!/usr/bin/env bash
-# Copyright (c) 2025 Hangzhou Guanwaii Technology Co., Ltd.
+# Copyright (c) 2025 mingcheng <mingcheng@apache.org>
 #
-# Set up TPROXY firewall rules for SingBox transparent proxying.
+# Set up TPROXY firewall rules for Clash transparent proxying.
 #
 # This source code is licensed under the MIT License,
 # which is located in the LICENSE file in the source tree's root directory.
 #
 # File: setup-tproxy.sh
-# Author: mingcheng (mingcheng@apache.org)
+# Author: mingcheng <mingcheng@apache.org>
 # File Created: 2025-03-19 14:32:47
 #
 # Modified By: mingcheng <mingcheng@apache.org>
-# Last Modified: 2025-12-28 11:34:32
+# Last Modified: 2025-12-28 23:27:05
 ##
 
 # Exit on error, undefined variable, or pipe failure
@@ -58,12 +58,12 @@ cleanup_firewall() {
     log_info "Cleaning up existing firewall rules..."
 
     # Remove mangle table rules
-    if iptables -t mangle -C PREROUTING -i "$FAURE_INTERFACE" -s "$FAURE_ADDR_RANGE" -j SINGBOX_TPROXY 2>/dev/null; then
-        iptables -t mangle -D PREROUTING -i "$FAURE_INTERFACE" -s "$FAURE_ADDR_RANGE" -j SINGBOX_TPROXY
+    if iptables -t mangle -C PREROUTING -i "$FAURE_INTERFACE" -s "$FAURE_ADDR_RANGE" -j CLASH_TPROXY 2>/dev/null; then
+        iptables -t mangle -D PREROUTING -i "$FAURE_INTERFACE" -s "$FAURE_ADDR_RANGE" -j CLASH_TPROXY
     fi
 
-    iptables -t mangle -F SINGBOX_TPROXY 2>/dev/null || true
-    iptables -t mangle -X SINGBOX_TPROXY 2>/dev/null || true
+    iptables -t mangle -F CLASH_TPROXY 2>/dev/null || true
+    iptables -t mangle -X CLASH_TPROXY 2>/dev/null || true
 
     # Remove routing rules
     while ip rule show | grep -q "fwmark $TPROXY_MARK lookup $TPROXY_TABLE"; do
@@ -80,30 +80,30 @@ cleanup_firewall() {
 }
 
 setup_tproxy_chain() {
-    log_info "Creating SINGBOX_TPROXY chain..."
-    iptables -t mangle -N SINGBOX_TPROXY
+    log_info "Creating CLASH_TPROXY chain..."
+    iptables -t mangle -N CLASH_TPROXY
 
     # Exclude local and private networks
     local private_nets=("0.0.0.0/8" "10.0.0.0/8" "127.0.0.0/8" "169.254.0.0/16" "172.16.0.0/12" "192.168.0.0/16" "224.0.0.0/4" "240.0.0.0/4")
     for net in "${private_nets[@]}"; do
-        iptables -t mangle -A SINGBOX_TPROXY -d "$net" -j RETURN
+        iptables -t mangle -A CLASH_TPROXY -d "$net" -j RETURN
     done
 
     # Exclude broadcast
-    iptables -t mangle -A SINGBOX_TPROXY -d 255.255.255.255/32 -j RETURN
+    iptables -t mangle -A CLASH_TPROXY -d 255.255.255.255/32 -j RETURN
 
     # Mark and TPROXY for TCP
     log_info "Configuring TPROXY rules for TCP/UDP on port $FAURE_TPORT..."
-    iptables -t mangle -A SINGBOX_TPROXY -p tcp -j MARK --set-mark "$TPROXY_MARK"
-    iptables -t mangle -A SINGBOX_TPROXY -p tcp -j TPROXY --tproxy-mark "$TPROXY_MARK/$TPROXY_MARK" --on-port "$FAURE_TPORT"
+    iptables -t mangle -A CLASH_TPROXY -p tcp -j MARK --set-mark "$TPROXY_MARK"
+    iptables -t mangle -A CLASH_TPROXY -p tcp -j TPROXY --tproxy-mark "$TPROXY_MARK/$TPROXY_MARK" --on-port "$FAURE_TPORT"
 
     # Mark and TPROXY for UDP
-    iptables -t mangle -A SINGBOX_TPROXY -p udp -j MARK --set-mark "$TPROXY_MARK"
-    iptables -t mangle -A SINGBOX_TPROXY -p udp -j TPROXY --tproxy-mark "$TPROXY_MARK/$TPROXY_MARK" --on-port "$FAURE_TPORT"
+    iptables -t mangle -A CLASH_TPROXY -p udp -j MARK --set-mark "$TPROXY_MARK"
+    iptables -t mangle -A CLASH_TPROXY -p udp -j TPROXY --tproxy-mark "$TPROXY_MARK/$TPROXY_MARK" --on-port "$FAURE_TPORT"
 
     # Apply TPROXY chain only to traffic from FAURE_ADDR_RANGE
     log_info "Applying TPROXY chain to interface $FAURE_INTERFACE for range $FAURE_ADDR_RANGE..."
-    iptables -t mangle -A PREROUTING -i "$FAURE_INTERFACE" -s "$FAURE_ADDR_RANGE" -j SINGBOX_TPROXY
+    iptables -t mangle -A PREROUTING -i "$FAURE_INTERFACE" -s "$FAURE_ADDR_RANGE" -j CLASH_TPROXY
 }
 
 setup_routing() {
@@ -129,10 +129,10 @@ verify_setup() {
     echo ""
     log_info "=== Verification ==="
     echo "--- Mangle PREROUTING rules ---"
-    iptables -t mangle -L PREROUTING -n -v | grep SINGBOX_TPROXY || echo "No SINGBOX_TPROXY rules found in PREROUTING"
+    iptables -t mangle -L PREROUTING -n -v | grep CLASH_TPROXY || echo "No CLASH_TPROXY rules found in PREROUTING"
 
-    echo -e "\n--- SINGBOX_TPROXY chain ---"
-    iptables -t mangle -L SINGBOX_TPROXY -n -v
+    echo -e "\n--- CLASH_TPROXY chain ---"
+    iptables -t mangle -L CLASH_TPROXY -n -v
 
     echo -e "\n--- Routing rules ---"
     ip rule show | grep "$TPROXY_TABLE"

@@ -5,7 +5,7 @@ Requires=multipath-routing.service
 
 [Service]
 Type=oneshot
-ExecStart=/usr/bin/fish /root/faure.sh/scripts/firewall.fish
+ExecStart=/root/faure.sh/scripts/setup-tproxy.sh
 RemainAfterExit=yes
 
 [Install]
