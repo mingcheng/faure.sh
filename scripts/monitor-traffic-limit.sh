@@ -1,0 +1,173 @@
+#!/usr/bin/env bash
+# Copyright (c) 2025 Hangzhou Guanwaii Technology Co., Ltd.
+#
+# Monitor network traffic for a specific interface and take action if limits are exceeded.
+# Features:
+# - Monthly traffic reset
+# - Warning threshold
+# - Blocking internet access when limit exceeded
+#
+# Usage: ./monitor-traffic-limit.sh <interface> <limit_gb> [warning_percent] [alert_script]
+# Example: ./monitor-traffic-limit.sh eth0 1000 80 /path/to/alert.sh
+#
+# This source code is licensed under the MIT License.
+
+set -u
+
+# --- Configuration ---
+IFACE="${1:-}"
+LIMIT_GB="${2:-}"
+WARNING_PERCENT="${3:-80}"
+ALERT_SCRIPT="${4:-}"
+
+STATE_DIR="/var/lib/faure/traffic"
+STATE_FILE="$STATE_DIR/${IFACE}.state"
+LOCK_FILE="/var/run/traffic_monitor_${IFACE}.lock"
+
+# --- Validation ---
+if [ -z "$IFACE" ] || [ -z "$LIMIT_GB" ]; then
+    echo "Usage: $0 <interface> <limit_gb> [warning_percent] [alert_script]"
+    exit 1
+fi
+
+if [ ! -d "/sys/class/net/$IFACE" ]; then
+    echo "Error: Interface $IFACE not found."
+    exit 1
+fi
+
+# Ensure state directory exists
+mkdir -p "$STATE_DIR"
+
+# --- Helper Functions ---
+
+# Get current RX and TX bytes
+get_bytes() {
+    local rx=$(cat "/sys/class/net/$IFACE/statistics/rx_bytes")
+    local tx=$(cat "/sys/class/net/$IFACE/statistics/tx_bytes")
+    echo "$((rx + tx))"
+}
+
+# Log messages
+log() {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1"
+}
+
+# Block interface
+block_interface() {
+    log "Blocking internet access for $IFACE..."
+
+    # Block forwarding
+    iptables -C FORWARD -i "$IFACE" -j DROP 2>/dev/null || iptables -I FORWARD -i "$IFACE" -j DROP
+    iptables -C FORWARD -o "$IFACE" -j DROP 2>/dev/null || iptables -I FORWARD -o "$IFACE" -j DROP
+
+    # Block output (optional, depending on if we want to block the host itself using this interface)
+    # iptables -C OUTPUT -o "$IFACE" -j DROP 2>/dev/null || iptables -I OUTPUT -o "$IFACE" -j DROP
+
+    # Execute alert script if provided
+    if [ -n "$ALERT_SCRIPT" ] && [ -x "$ALERT_SCRIPT" ]; then
+        "$ALERT_SCRIPT" "BLOCK" "$IFACE" "$CURRENT_USAGE_GB" "$LIMIT_GB"
+    fi
+}
+
+# Unblock interface
+unblock_interface() {
+    log "Unblocking internet access for $IFACE..."
+
+    iptables -D FORWARD -i "$IFACE" -j DROP 2>/dev/null || true
+    iptables -D FORWARD -o "$IFACE" -j DROP 2>/dev/null || true
+    # iptables -D OUTPUT -o "$IFACE" -j DROP 2>/dev/null || true
+}
+
+# Send warning
+send_warning() {
+    log "Warning: Traffic usage for $IFACE is at ${1}% ($CURRENT_USAGE_GB GB / $LIMIT_GB GB)"
+    if [ -n "$ALERT_SCRIPT" ] && [ -x "$ALERT_SCRIPT" ]; then
+        "$ALERT_SCRIPT" "WARNING" "$IFACE" "$CURRENT_USAGE_GB" "$LIMIT_GB"
+    fi
+}
+
+# --- Main Logic ---
+
+# Acquire lock to prevent concurrent runs
+exec 200>"$LOCK_FILE"
+flock -n 200 || { echo "Script is already running."; exit 1; }
+
+CURRENT_BYTES=$(get_bytes)
+CURRENT_MONTH=$(date +%Y-%m)
+
+# Load state
+# State file format: MONTH LAST_BYTES ACCUMULATED_BYTES BLOCKED_STATUS WARNING_SENT
+if [ -f "$STATE_FILE" ]; then
+    read -r STORED_MONTH LAST_BYTES ACCUMULATED_BYTES BLOCKED_STATUS WARNING_SENT < "$STATE_FILE"
+else
+    STORED_MONTH="$CURRENT_MONTH"
+    LAST_BYTES="$CURRENT_BYTES"
+    ACCUMULATED_BYTES="0"
+    BLOCKED_STATUS="0"
+    WARNING_SENT="0"
+fi
+
+# Handle Month Reset
+if [ "$CURRENT_MONTH" != "$STORED_MONTH" ]; then
+    log "New month detected. Resetting counters for $IFACE."
+    STORED_MONTH="$CURRENT_MONTH"
+    ACCUMULATED_BYTES="0"
+    LAST_BYTES="$CURRENT_BYTES" # Reset baseline
+    BLOCKED_STATUS="0"
+    WARNING_SENT="0"
+    unblock_interface
+fi
+
+# Calculate Delta
+if [ "$CURRENT_BYTES" -lt "$LAST_BYTES" ]; then
+    # Reboot or counter overflow detected
+    DELTA="$CURRENT_BYTES"
+else
+    DELTA=$((CURRENT_BYTES - LAST_BYTES))
+fi
+
+# Update Accumulator
+ACCUMULATED_BYTES=$((ACCUMULATED_BYTES + DELTA))
+LAST_BYTES="$CURRENT_BYTES"
+
+# Convert to GB for comparison (1 GB = 1073741824 bytes)
+CURRENT_USAGE_GB=$(awk "BEGIN {printf \"%.2f\", $ACCUMULATED_BYTES / 1073741824}")
+
+# Check Limits
+LIMIT_BYTES=$((LIMIT_GB * 1073741824))
+WARNING_BYTES=$(awk "BEGIN {printf \"%.0f\", $LIMIT_BYTES * $WARNING_PERCENT / 100}")
+
+# 1. Check Block Limit
+if [ "$ACCUMULATED_BYTES" -ge "$LIMIT_BYTES" ]; then
+    if [ "$BLOCKED_STATUS" -eq "0" ]; then
+        log "Limit exceeded ($CURRENT_USAGE_GB GB >= $LIMIT_GB GB). Initiating block."
+        block_interface
+        BLOCKED_STATUS="1"
+    fi
+# 2. Check Warning Threshold
+elif [ "$ACCUMULATED_BYTES" -ge "$WARNING_BYTES" ]; then
+    if [ "$WARNING_SENT" -eq "0" ]; then
+        send_warning "$WARNING_PERCENT"
+        WARNING_SENT="1"
+    fi
+    # Ensure we are unblocked if we are below limit (e.g. limit increased manually)
+    if [ "$BLOCKED_STATUS" -eq "1" ]; then
+         unblock_interface
+         BLOCKED_STATUS="0"
+    fi
+else
+    # Normal operation
+    if [ "$BLOCKED_STATUS" -eq "1" ]; then
+         unblock_interface
+         BLOCKED_STATUS="0"
+    fi
+fi
+
+# Save State
+echo "$STORED_MONTH $LAST_BYTES $ACCUMULATED_BYTES $BLOCKED_STATUS $WARNING_SENT" > "$STATE_FILE"
+
+# Output status
+echo "Interface: $IFACE"
+echo "Month: $STORED_MONTH"
+echo "Usage: $CURRENT_USAGE_GB GB / $LIMIT_GB GB"
+echo "Status: $([ "$BLOCKED_STATUS" -eq 1 ] && echo "BLOCKED" || echo "ACTIVE")"

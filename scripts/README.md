@@ -1,11 +1,3 @@
-# Scripts for Debian/Ubuntu
+# Scripts Directory
 
-## firewall.fish
-
-Configures iptables rules for transparent proxy and network traffic management. Sets up TPROXY rules and blocks external access to specified ports.
-
-Requires: root privileges, [fish shell](https://fishshell.com/), and [iptables](https://netfilter.org/projects/iptables/index.html) installed and available in PATH.  
-
-## install_docker.fish
-
-Automates the Docker installation process. Downloads the signed key and installs via the Aliyun repository mirror.
+This directory contains various utility scripts for setting up, monitoring, and verifying the network configuration and services for the project.
