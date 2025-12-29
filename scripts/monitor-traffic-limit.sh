@@ -47,6 +47,61 @@ get_bytes() {
     echo "$((rx + tx))"
 }
 
+# Get traffic from vnStat if available
+get_vnstat_bytes() {
+    if ! command -v vnstat >/dev/null 2>&1; then
+        return 1
+    fi
+
+    # Check if interface is monitored
+    if ! LC_ALL=C vnstat -i "$IFACE" --oneline >/dev/null 2>&1; then
+        return 1
+    fi
+
+    # Try JSON output (vnStat 2.x)
+    if LC_ALL=C vnstat --json -i "$IFACE" >/dev/null 2>&1 && command -v jq >/dev/null 2>&1; then
+        local current_year=$(date +%Y)
+        local current_month=$(date +%m | sed 's/^0//')
+
+        local bytes=$(LC_ALL=C vnstat --json -i "$IFACE" | jq -r --arg y "$current_year" --arg m "$current_month" '
+            .interfaces[0].traffic.month[] | select(.date.year == ($y|tonumber) and .date.month == ($m|tonumber)) | .rx + .tx
+        ')
+
+        if [ -n "$bytes" ] && [ "$bytes" != "null" ]; then
+            echo "$bytes"
+            return 0
+        fi
+    fi
+
+    # Fallback to oneline output parsing
+    local output=$(LC_ALL=C vnstat -i "$IFACE" --oneline 2>/dev/null)
+    if [ -n "$output" ]; then
+        # Field 10 is month total (e.g., "10.50 GiB")
+        local month_total_str=$(echo "$output" | cut -d';' -f10)
+
+        # Convert to bytes
+        echo "$month_total_str" | awk '
+            function to_bytes(val, unit) {
+                if (unit ~ /KiB/) return val * 1024;
+                if (unit ~ /MiB/) return val * 1024 * 1024;
+                if (unit ~ /GiB/) return val * 1024 * 1024 * 1024;
+                if (unit ~ /TiB/) return val * 1024 * 1024 * 1024 * 1024;
+                if (unit ~ /KB/) return val * 1000;
+                if (unit ~ /MB/) return val * 1000 * 1000;
+                if (unit ~ /GB/) return val * 1000 * 1000 * 1000;
+                if (unit ~ /TB/) return val * 1000 * 1000 * 1000 * 1000;
+                return val;
+            }
+            {
+                print sprintf("%.0f", to_bytes($1, $2))
+            }
+        '
+        return 0
+    fi
+
+    return 1
+}
+
 # Log messages
 log() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1"
@@ -118,17 +173,27 @@ if [ "$CURRENT_MONTH" != "$STORED_MONTH" ]; then
     unblock_interface
 fi
 
-# Calculate Delta
-if [ "$CURRENT_BYTES" -lt "$LAST_BYTES" ]; then
-    # Reboot or counter overflow detected
-    DELTA="$CURRENT_BYTES"
+# Try to get traffic from vnStat
+VNSTAT_BYTES=$(get_vnstat_bytes)
+if [ $? -eq 0 ] && [ -n "$VNSTAT_BYTES" ]; then
+    # Use vnStat data
+    ACCUMULATED_BYTES="$VNSTAT_BYTES"
+    # We still update LAST_BYTES to keep the internal counter in sync for potential fallback
+    LAST_BYTES="$CURRENT_BYTES"
 else
-    DELTA=$((CURRENT_BYTES - LAST_BYTES))
-fi
+    # Fallback to internal calculation
+    # Calculate Delta
+    if [ "$CURRENT_BYTES" -lt "$LAST_BYTES" ]; then
+        # Reboot or counter overflow detected
+        DELTA="$CURRENT_BYTES"
+    else
+        DELTA=$((CURRENT_BYTES - LAST_BYTES))
+    fi
 
-# Update Accumulator
-ACCUMULATED_BYTES=$((ACCUMULATED_BYTES + DELTA))
-LAST_BYTES="$CURRENT_BYTES"
+    # Update Accumulator
+    ACCUMULATED_BYTES=$((ACCUMULATED_BYTES + DELTA))
+    LAST_BYTES="$CURRENT_BYTES"
+fi
 
 # Convert to GB for comparison (1 GB = 1073741824 bytes)
 CURRENT_USAGE_GB=$(awk "BEGIN {printf \"%.2f\", $ACCUMULATED_BYTES / 1073741824}")
