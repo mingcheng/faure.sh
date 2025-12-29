@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Copyright (c) 2025 Hangzhou Guanwaii Technology Co., Ltd.
+# Copyright (c) 2025 mingcheng <mingcheng@apache.org>
 #
 # Verify network configuration for multipath routing and TProxy
 #
@@ -11,7 +11,7 @@
 # File Created: 2025-12-27 23:53:23
 #
 # Modified By: mingcheng <mingcheng@apache.org>
-# Last Modified: 2025-12-28 11:21:32
+# Last Modified: 2025-12-29 08:22:06
 ##
 
 # Colors

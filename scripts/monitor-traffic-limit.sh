@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Copyright (c) 2025 Hangzhou Guanwaii Technology Co., Ltd.
+# Copyright (c) 2025 mingcheng <mingcheng@apache.org>
 #
 # Monitor network traffic for a specific interface and take action if limits are exceeded.
 # Features:

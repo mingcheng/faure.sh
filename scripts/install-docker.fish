@@ -1,15 +1,15 @@
 #!/usr/bin/env fish
-# Copyright (c) 2025 Hangzhou Guanwaii Technology Co., Ltd.
+# Copyright (c) 2025 mingcheng <mingcheng@apache.org>
 #
 # This source code is licensed under the MIT License,
 # which is located in the LICENSE file in the source tree's root directory.
 #
-# File: install_docker.fish
+# File: install-docker.fish
 # Author: mingcheng (mingcheng@apache.org)
 # File Created: 2025-03-20 11:44:32
 #
-# Modified By: mingcheng (mingcheng@apache.org)
-# Last Modified: 2025-10-01 22:46:42
+# Modified By: mingcheng <mingcheng@apache.org>
+# Last Modified: 2025-12-29 08:21:19
 ##
 
 # Colors for output

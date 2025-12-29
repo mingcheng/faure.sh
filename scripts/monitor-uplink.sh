@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Copyright (c) 2025 Hangzhou Guanwaii Technology Co., Ltd.
+# Copyright (c) 2025 mingcheng <mingcheng@apache.org>
 #
 # Monitor uplink status and update multipath routing
 #
@@ -11,7 +11,7 @@
 # File Created: 2025-12-27 22:40:47
 #
 # Modified By: mingcheng <mingcheng@apache.org>
-# Last Modified: 2025-12-28 11:20:57
+# Last Modified: 2025-12-29 08:21:46
 ##
 
 # Configuration
