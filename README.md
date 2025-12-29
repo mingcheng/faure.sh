@@ -1,4 +1,6 @@
-# Faure.sh - Transparent Gateway & Dual-WAN Load Balancing Suite
+# Faure.sh 
+
+__Transparent Gateway & Dual-WAN Load Balancing Suite__
 
 `faure.sh` is a configuration suite designed for Debian/Ubuntu systems to deploy a transparent gateway. It simplifies the setup of Dual-WAN load balancing, Transparent Proxy (TProxy), network optimization, and related services.
 
