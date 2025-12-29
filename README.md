@@ -1,89 +1,80 @@
-# Faure.sh - Transparent Router Configuration Script
+# Faure.sh - Transparent Gateway & Dual-WAN Load Balancing Suite
 
-A lightweight and efficient transparent router solution for debian-based systems.
+`faure.sh` is a configuration suite designed for Debian/Ubuntu systems to deploy a transparent gateway. It simplifies the setup of Dual-WAN load balancing, Transparent Proxy (TProxy), network optimization, and related services.
 
-## System Configuration
+![Architecture](./assets/route-arch.png)
 
-### Prerequisites
+## 📖 Introduction
 
-Install required system packages:
-```bash
-sudo apt update
-sudo apt install netplan.io iptables fish net-tools
-```
+`faure.sh` configures a Debian server (or VM) to act as a core gateway and transparent proxy, making it ideal for home or small office networks.
 
-and install the docker by the script which locatied at ``scripts/install_docker.fish``.
+**Core Features:**
 
-### Network Configuration
+*   **Dual-WAN Load Balancing (Multipath Routing):** Automatically detects and utilizes two uplink interfaces (e.g., `eth0` and `eth1`) for bandwidth aggregation and failover.
+*   **Transparent Proxy (TProxy):** Implements full-network transparent proxying and traffic routing based on `iptables` and `sing-box`/`mihomo`, with UDP forwarding support.
+*   **Network Optimization:** Automatically configures BBR congestion control and tunes kernel parameters (sysctl) to enhance network throughput and concurrency.
+*   **Traffic Monitoring & Limiting:** Includes scripts to monitor monthly traffic on specific interfaces, triggering alerts or blocking access when thresholds are reached to prevent overage charges.
+*   **Service Integration:** Provides Docker Compose templates for one-click deployment of common network services like AdGuard Home (DNS) and iPerf3.
 
-Configure network interfaces using Netplan:
-```bash
-sudo cp netplan/*.yaml /etc/netplan/
-sudo netplan apply
-```
+## 🏗️ Architecture
 
-Available configurations:
-- `90-static.yaml` - Static IP configuration for router interface
-- `99-dhcp.yaml` - DHCP fallback configuration
+As illustrated in the diagram, the system is typically deployed on bare metal or within a virtual environment (e.g., Proxmox VE, ESXi, or bhyve on FreeBSD). Key components include:
 
-### Kernel Optimization
+*   **Debian Router:** The core gateway that runs the scripts and services provided by this project.
+*   **Interfaces:**
+    *   `eth0` (WAN1/LAN): Connects to the internal switch or main router, serving as the LAN gateway (e.g., `172.16.1.1`).
+    *   `eth1` (WAN2): Connects to a secondary broadband line or 4G/5G CPE, obtaining an external IP via DHCP (e.g., `192.168.66.x`).
+*   **Services:** Dockerized services, such as AdGuard Home, handle local DNS resolution and coordinate with TProxy for intelligent traffic routing.
 
-Apply optimized kernel parameters for routing performance:
-```bash
-sudo cp sysctl.d/*.conf /etc/sysctl.d/
-sudo sysctl --system
-```
+## 🚀 Quick Start
 
-### Firewall Rules
+### 1. Prerequisites
 
-Configure transparent proxy and security rules:
-```bash
-sudo ./scripts/firewall.fish
-```
+*   **OS:** Debian 11/12 or Ubuntu 20.04/22.04 LTS.
+*   **Permissions:** Root privileges required.
+*   **Hardware:** At least two network interfaces (physical or virtual).
 
-you can auto start the script by enable the rc.local service:
-```bash
-sudo systemctl enable rc-local
-```
-and link the script to `/etc/rc.local`:
-```bash
-sudo ln -s /path/to/faure.sh/scripts/firewall.fish /etc/rc.local
-```
+### 2. Installation
 
-## Service Deployment
+1.  **Clone the Repository**
+    It is recommended to clone the project to `/root/faure.sh`:
+    ```bash
+    git clone https://github.com/your-repo/faure.sh.git /root/faure.sh
+    cd /root/faure.sh
+    ```
 
-### Docker Services
+2.  **Run the Installation Script**
+    This script automatically installs dependencies (netplan, iptables, docker, etc.), copies configuration files, and starts the necessary systemd services.
+    ```bash
+    sudo ./install.sh
+    ```
 
-Enable Docker service and start containers:
-```bash
-sudo systemctl enable docker
-sudo systemctl start docker
-```
+3.  **Verify the Setup**
+    Run the verification script to check system status, kernel parameters, and network configuration:
+    ```bash
+    sudo ./verify.sh
+    ```
 
-### Mihomo Proxy
+### 3. Configuration
 
-Deploy Mihomo for transparent proxy functionality:
-```bash
-cd compose/mihomo
-docker compose up -d
-```
+After installation, adjust the following configurations to match your network environment:
 
-### AdGuard Home(Optional but Recommended)
+*   **Network Interfaces (Netplan):**
+    Edit the YAML files in `netplan/` to configure static IPs or DHCP, then run `netplan apply`.
+    *   `90-static.yaml`: For static IP configuration (typically LAN/WAN1).
+    *   `99-dhcp.yaml`: For DHCP interfaces.
 
-Deploy AdGuard Home for DNS filtering:
-```bash
-cd compose/adguard
-docker compose up -d
-```
+*   **Traffic Monitoring (Optional):**
+    If using a metered connection (e.g., 4G/5G), use `scripts/monitor-traffic-limit.sh`.
+    ```bash
+    # Example: Limit eth1 to 100GB/month, alert at 80%
+    # Recommended: Add to crontab to run periodically
+    */5 * * * * /root/faure.sh/scripts/monitor-traffic-limit.sh eth1 100 80 <path/to/alert-script.sh>
+    ```
 
-### Performance Testing(Optional)
+*   **TProxy Rules:**
+    Modify the `FAURE_ADDR_RANGE` variable in `scripts/setup-tproxy.sh` to match your local subnet.
 
-Deploy iperf3 for network performance testing:
-```bash
-cd compose/iperf3
-docker compose up -d
-```
+## 📄 License
 
-## License
-
-This project is licensed under the MIT License - see the LICENSE file for details.
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
