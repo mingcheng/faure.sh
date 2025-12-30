@@ -3,7 +3,7 @@ Description=Run Uplink Monitor every 30 seconds
 
 [Timer]
 OnBootSec=1min
-OnUnitActiveSec=30s
+OnUnitActiveSec=60s
 
 [Install]
 WantedBy=timers.target
