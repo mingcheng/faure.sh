@@ -30,27 +30,26 @@ STATE_FILE="/run/uplink_status"
 # Function to get Gateway IP for an interface
 get_gateway() {
     local iface=$1
-    # Try to get from main table first
-    local gw=$(ip route show dev $iface default | awk '/default/ {print $3}')
+    local gw=""
 
-    # If not found in main table, check for DHCP provided gateway route (scope link proto dhcp)
-    if [ -z "$gw" ]; then
-         gw=$(ip route show dev $iface proto dhcp scope link | awk '{print $1}' | head -n 1)
+    # 1. Try specific tables first (most reliable)
+    if [ "$iface" == "$IF1" ]; then
+         gw=$(ip route show table $TABLE1 2>/dev/null | grep default | awk '{print $3}')
+    elif [ "$iface" == "$IF2" ]; then
+         gw=$(ip route show table $TABLE2 2>/dev/null | grep default | awk '{print $3}')
     fi
 
+    # 2. If not found, try main table (handle simple 'default via')
     if [ -z "$gw" ]; then
-        # Try to get from specific tables
-        if [ "$iface" == "$IF1" ]; then
-             # Try table name first, then ID 100
-             gw=$(ip route show table $TABLE1 2>/dev/null | grep default | awk '{print $3}')
-             if [ -z "$gw" ]; then gw=$(ip route show table 100 2>/dev/null | grep default | awk '{print $3}'); fi
-        elif [ "$iface" == "$IF2" ]; then
-             gw=$(ip route show table $TABLE2 2>/dev/null | grep default | awk '{print $3}')
-             if [ -z "$gw" ]; then gw=$(ip route show table 101 2>/dev/null | grep default | awk '{print $3}'); fi
-        fi
+         gw=$(ip route show dev $iface 2>/dev/null | grep "default via" | awk '{print $3}')
     fi
 
-    # Fallback for eth0 (static) if not found
+    # 3. DHCP fallback
+    if [ -z "$gw" ]; then
+         gw=$(ip route show dev $iface proto dhcp scope link 2>/dev/null | awk '{print $1}' | head -n 1)
+    fi
+
+    # 4. Fallback for eth0 (static)
     if [ -z "$gw" ] && [ "$iface" == "eth0" ]; then
         gw="172.16.1.1"
     fi
@@ -62,6 +61,12 @@ get_gateway() {
 check_connectivity() {
     local iface=$1
     local up=0
+
+    # Check if interface exists
+    if ! ip link show "$iface" >/dev/null 2>&1; then
+        echo 0
+        return
+    fi
 
     for target in "${CHECK_TARGETS[@]}"; do
         # Use ping with interface binding.
@@ -77,15 +82,52 @@ check_connectivity() {
     echo $up
 }
 
+# --- Auto-Restore Logic ---
+# Check if interfaces are up but missing routing tables (e.g. after reconnect)
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SETUP_SCRIPT="$SCRIPT_DIR/setup-multipath.sh"
+NEEDS_RESTORE=0
+
+check_restore_needed() {
+    local iface=$1
+    local table=$2
+
+    # Check if interface exists and is UP
+    if ip link show "$iface" >/dev/null 2>&1; then
+        # Check if it has an IP address
+        if ip -4 addr show "$iface" | grep -q "inet"; then
+            # Check if its routing table is empty
+            if [ -z "$(ip route show table $table 2>/dev/null | grep default)" ]; then
+                echo "Interface $iface is UP with IP, but Table $table is empty."
+                return 0 # Needs restore
+            fi
+        else
+            # Interface exists but no IP.
+            # If it's eth1 (USB), it might be waiting for DHCP.
+            # We can try to trigger DHCP if we are sure (optional, risky if network manager is active)
+            echo "Interface $iface is UP but has no IP address."
+        fi
+    fi
+    return 1 # No restore needed
+}
+
+if check_restore_needed "$IF1" "$TABLE1"; then NEEDS_RESTORE=1; fi
+if check_restore_needed "$IF2" "$TABLE2"; then NEEDS_RESTORE=1; fi
+
+if [ "$NEEDS_RESTORE" -eq 1 ]; then
+    echo "Detected missing routing tables. Attempting to restore multipath configuration..."
+    if [ -f "$SETUP_SCRIPT" ]; then
+        bash "$SETUP_SCRIPT"
+        # Wait a moment for routes to settle
+        sleep 1
+    else
+        echo "Error: Setup script not found at $SETUP_SCRIPT"
+    fi
+fi
+
 # Main logic
 GW1=$(get_gateway $IF1)
 GW2=$(get_gateway $IF2)
-
-# If GW2 is empty (maybe eth1 is down or not configured yet), try to detect from system
-if [ -z "$GW2" ]; then
-    # Try to find any gateway for eth1
-    GW2=$(ip route show dev $IF2 | grep default | awk '{print $3}')
-fi
 
 # Check status
 STATUS1=$(check_connectivity $IF1)

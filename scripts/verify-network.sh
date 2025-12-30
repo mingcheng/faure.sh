@@ -94,6 +94,13 @@ IP_API="http://ifconfig.me/ip"
 
 check_iface() {
     local iface=$1
+
+    # Check if interface exists
+    if ! ip link show "$iface" >/dev/null 2>&1; then
+        log_warn "Interface $iface does not exist. Skipping."
+        return
+    fi
+
     local ip_addr=$(ip -4 addr show $iface | grep -oP '(?<=inet\s)\d+(\.\d+){3}' | head -n 1)
 
     if [ -z "$ip_addr" ]; then

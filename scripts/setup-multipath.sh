@@ -37,20 +37,31 @@ get_subnet() {
 
 get_gateway() {
     local iface=$1
-    # Try to find gateway in main table first
-    local gw=$(ip route show dev $iface default | awk '/default/ {print $3}')
+    local gw=""
 
-    # If not found, check for DHCP provided gateway route (often appears as scope link proto dhcp)
+    # 1. Try specific tables first (most reliable)
+    if [ "$iface" == "$IF1" ]; then
+         gw=$(ip route show table $TABLE1 2>/dev/null | grep default | awk '{print $3}')
+    elif [ "$iface" == "$IF2" ]; then
+         gw=$(ip route show table $TABLE2 2>/dev/null | grep default | awk '{print $3}')
+    fi
+
+    # 2. If not found, try main table (handle simple 'default via')
     if [ -z "$gw" ]; then
-         gw=$(ip route show dev $iface proto dhcp scope link | awk '{print $1}' | head -n 1)
+         gw=$(ip route show dev $iface 2>/dev/null | grep "default via" | awk '{print $3}')
     fi
 
-    # Fallback for static config if not in main table yet (e.g. defined in netplan but not applied to main)
-    if [ -z "$gw" ] && [ "$iface" == "eth0" ]; then
-        echo "172.16.1.1" # Fallback for static WAN
-    else
-        echo "$gw"
+    # 3. DHCP fallback
+    if [ -z "$gw" ]; then
+         gw=$(ip route show dev $iface proto dhcp scope link 2>/dev/null | awk '{print $1}' | head -n 1)
     fi
+
+    # 4. Fallback for eth0 (static)
+    if [ -z "$gw" ] && [ "$iface" == "eth0" ]; then
+        gw="172.16.1.1"
+    fi
+
+    echo "$gw"
 }
 
 # --- Execution ---
@@ -60,27 +71,63 @@ echo "Configuring multipath routing..."
 IP1=$(get_ip $IF1)
 IP2=$(get_ip $IF2)
 
-if [ -z "$IP1" ]; then echo "Error: No IP for $IF1"; exit 1; fi
-if [ -z "$IP2" ]; then echo "Error: No IP for $IF2"; exit 1; fi
+# Check which interfaces are available
+HAS_IF1=0
+HAS_IF2=0
 
-echo "$IF1 IP: $IP1"
-echo "$IF2 IP: $IP2"
+if [ -n "$IP1" ]; then
+    echo "$IF1 IP: $IP1"
+    HAS_IF1=1
+else
+    echo "Warning: No IP for $IF1. Skipping $IF1 configuration."
+fi
+
+if [ -n "$IP2" ]; then
+    echo "$IF2 IP: $IP2"
+    HAS_IF2=1
+else
+    echo "Warning: No IP for $IF2. Skipping $IF2 configuration."
+fi
+
+if [ "$HAS_IF1" -eq 0 ] && [ "$HAS_IF2" -eq 0 ]; then
+    echo "Error: Neither $IF1 nor $IF2 has an IP address. Exiting."
+    exit 1
+fi
 
 # Detect Subnets
-SUBNET1=$(get_subnet $IF1)
-SUBNET2=$(get_subnet $IF2)
-echo "$IF1 Subnet: $SUBNET1"
-echo "$IF2 Subnet: $SUBNET2"
+SUBNET1=""
+SUBNET2=""
+if [ "$HAS_IF1" -eq 1 ]; then
+    SUBNET1=$(get_subnet $IF1)
+    echo "$IF1 Subnet: $SUBNET1"
+fi
+if [ "$HAS_IF2" -eq 1 ]; then
+    SUBNET2=$(get_subnet $IF2)
+    echo "$IF2 Subnet: $SUBNET2"
+fi
 
 # Detect Gateways
-GW1=$(get_gateway $IF1)
-GW2=$(get_gateway $IF2)
+GW1=""
+GW2=""
+if [ "$HAS_IF1" -eq 1 ]; then
+    GW1=$(get_gateway $IF1)
+    if [ -z "$GW1" ]; then
+        echo "Error: No Gateway for $IF1"
+        HAS_IF1=0
+    else
+        echo "$IF1 Gateway: $GW1"
+    fi
+fi
 
-if [ -z "$GW1" ]; then echo "Error: No Gateway for $IF1"; exit 1; fi
-if [ -z "$GW2" ]; then echo "Error: No Gateway for $IF2"; exit 1; fi
-
-echo "$IF1 Gateway: $GW1"
-echo "$IF2 Gateway: $GW2"
+if [ "$HAS_IF2" -eq 1 ]; then
+    GW2=$(get_gateway $IF2)
+    if [ -z "$GW2" ]; then
+        echo "Error: No Gateway for $IF2"
+        HAS_IF2=0
+    else
+        echo "$IF2 Gateway: $GW2"
+    fi
+fi
 
 # Flush old routing table rules
 echo "Flushing old routing tables..."
@@ -88,31 +135,40 @@ ip route flush table $TABLE1 || true
 ip route flush table $TABLE2 || true
 
 # Configure Table 1 ($IF1)
-echo "Configuring route table $TABLE1..."
-# Add local subnet routes to table to ensure local traffic works
-[ -n "$SUBNET1" ] && ip route add $SUBNET1 dev $IF1 table $TABLE1
-[ -n "$SUBNET2" ] && ip route add $SUBNET2 dev $IF2 table $TABLE1
-ip route add default via $GW1 dev $IF1 table $TABLE1
+if [ "$HAS_IF1" -eq 1 ]; then
+    echo "Configuring route table $TABLE1..."
+    # Add local subnet routes to table to ensure local traffic works
+    [ -n "$SUBNET1" ] && ip route add $SUBNET1 dev $IF1 table $TABLE1
+    [ -n "$SUBNET2" ] && ip route add $SUBNET2 dev $IF2 table $TABLE1 2>/dev/null || true
+    ip route add default via $GW1 dev $IF1 table $TABLE1
+fi
 
 # Configure Table 2 ($IF2)
-echo "Configuring route table $TABLE2..."
-[ -n "$SUBNET1" ] && ip route add $SUBNET1 dev $IF1 table $TABLE2
-[ -n "$SUBNET2" ] && ip route add $SUBNET2 dev $IF2 src $IP2 table $TABLE2
-ip route add default via $GW2 dev $IF2 table $TABLE2
+if [ "$HAS_IF2" -eq 1 ]; then
+    echo "Configuring route table $TABLE2..."
+    [ -n "$SUBNET1" ] && ip route add $SUBNET1 dev $IF1 table $TABLE2 2>/dev/null || true
+    [ -n "$SUBNET2" ] && ip route add $SUBNET2 dev $IF2 src $IP2 table $TABLE2
+    ip route add default via $GW2 dev $IF2 table $TABLE2
+fi
 
 # Cleanup old policy routing rules
 echo "Cleaning up old policy rules..."
-ip rule del from $IP1 table $TABLE1 priority 100 2>/dev/null || true
-ip rule del from $IP2 table $TABLE2 priority 101 2>/dev/null || true
+# Try to clean up rules for known IPs. If IP is empty, we can't delete by source IP.
+if [ -n "$IP1" ]; then ip rule del from $IP1 table $TABLE1 priority 100 2>/dev/null || true; fi
+if [ -n "$IP2" ]; then ip rule del from $IP2 table $TABLE2 priority 101 2>/dev/null || true; fi
 # Remove old subnet rules if they exist
 [ -n "$SUBNET2" ] && ip rule del from $SUBNET2 table $TABLE2 priority 101 2>/dev/null || true
 
 # Add new policy routing rules
 echo "Adding new policy rules..."
-ip rule add from $IP1 table $TABLE1 priority 100
-ip rule add from $IP2 table $TABLE2 priority 101
-# Ensure traffic originating from eth2 subnet uses table 2
-[ -n "$SUBNET2" ] && ip rule add from $SUBNET2 table $TABLE2 priority 101
+if [ "$HAS_IF1" -eq 1 ]; then
+    ip rule add from $IP1 table $TABLE1 priority 100
+fi
+if [ "$HAS_IF2" -eq 1 ]; then
+    ip rule add from $IP2 table $TABLE2 priority 101
+    # Ensure traffic originating from eth2 subnet uses table 2
+    [ -n "$SUBNET2" ] && ip rule add from $SUBNET2 table $TABLE2 priority 101
+fi
 
 # --- Docker/NAT Compatibility (Connection Marking) ---
 echo "Configuring connection marking..."
@@ -123,8 +179,12 @@ iptables -t mangle -N MULTIPATH_MARK 2>/dev/null || true
 iptables -t mangle -F MULTIPATH_MARK
 iptables -t mangle -A MULTIPATH_MARK -j CONNMARK --restore-mark
 # Exclude LAN traffic from being marked as "WAN incoming" on IF1
-iptables -t mangle -A MULTIPATH_MARK -i $IF1 ! -s $LAN_NET -m conntrack --ctstate NEW -j MARK --set-mark $MARK1
-iptables -t mangle -A MULTIPATH_MARK -i $IF2 -m conntrack --ctstate NEW -j MARK --set-mark $MARK2
+if [ "$HAS_IF1" -eq 1 ]; then
+    iptables -t mangle -A MULTIPATH_MARK -i $IF1 ! -s $LAN_NET -m conntrack --ctstate NEW -j MARK --set-mark $MARK1
+fi
+if [ "$HAS_IF2" -eq 1 ]; then
+    iptables -t mangle -A MULTIPATH_MARK -i $IF2 -m conntrack --ctstate NEW -j MARK --set-mark $MARK2
+fi
 iptables -t mangle -A MULTIPATH_MARK -m mark ! --mark 0 -j CONNMARK --save-mark
 iptables -t mangle -A MULTIPATH_MARK -m mark --mark $MARK1 -j ACCEPT
 iptables -t mangle -A MULTIPATH_MARK -m mark --mark $MARK2 -j ACCEPT
@@ -143,20 +203,34 @@ ip rule add fwmark $MARK2 table $TABLE2 priority 91
 echo "Updating main routing table..."
 ip route del default 2>/dev/null || true
 # Ensure main table has routes to gateways (needed for nexthop)
-ip route replace $GW1 dev $IF1 2>/dev/null || true
-ip route replace $GW2 dev $IF2 2>/dev/null || true
+if [ "$HAS_IF1" -eq 1 ]; then
+    ip route replace $GW1 dev $IF1 2>/dev/null || true
+fi
+if [ "$HAS_IF2" -eq 1 ]; then
+    ip route replace $GW2 dev $IF2 2>/dev/null || true
+fi
 
-echo "Adding multipath default route..."
-ip route add default scope global \
-    nexthop via $GW1 dev $IF1 weight 1 \
-    nexthop via $GW2 dev $IF2 weight 1
+echo "Adding default route..."
+if [ "$HAS_IF1" -eq 1 ] && [ "$HAS_IF2" -eq 1 ]; then
+    ip route add default scope global \
+        nexthop via $GW1 dev $IF1 weight 1 \
+        nexthop via $GW2 dev $IF2 weight 1
+elif [ "$HAS_IF1" -eq 1 ]; then
+    ip route add default via $GW1 dev $IF1
+elif [ "$HAS_IF2" -eq 1 ]; then
+    ip route add default via $GW2 dev $IF2
+fi
 
 # NAT
 echo "Configuring NAT..."
-iptables -t nat -D POSTROUTING -o $IF1 -j MASQUERADE 2>/dev/null || true
-iptables -t nat -D POSTROUTING -o $IF2 -j MASQUERADE 2>/dev/null || true
-iptables -t nat -A POSTROUTING -o $IF1 -j MASQUERADE
-iptables -t nat -A POSTROUTING -o $IF2 -j MASQUERADE
+if [ "$HAS_IF1" -eq 1 ]; then
+    iptables -t nat -D POSTROUTING -o $IF1 -j MASQUERADE 2>/dev/null || true
+    iptables -t nat -A POSTROUTING -o $IF1 -j MASQUERADE
+fi
+if [ "$HAS_IF2" -eq 1 ]; then
+    iptables -t nat -D POSTROUTING -o $IF2 -j MASQUERADE 2>/dev/null || true
+    iptables -t nat -A POSTROUTING -o $IF2 -j MASQUERADE
+fi
 
 ip route flush cache
 echo "Multipath routing configured successfully"
