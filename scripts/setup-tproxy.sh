@@ -70,7 +70,8 @@ cleanup_firewall() {
         ip rule del fwmark "$TPROXY_MARK" lookup "$TPROXY_TABLE"
     done
 
-    ip route del local 0.0.0.0/0 dev lo table "$TPROXY_TABLE" 2>/dev/null || true
+    # Flush the table to ensure it's clean
+    ip route flush table "$TPROXY_TABLE" 2>/dev/null || true
 
     # Remove NAT DNS redirect rules
     iptables -t nat -D PREROUTING -i "$FAURE_INTERFACE" -s "$FAURE_ADDR_RANGE" -p udp --dport 53 -j REDIRECT --to-ports 53 2>/dev/null || true
@@ -114,9 +115,8 @@ setup_routing() {
         ip rule add fwmark "$TPROXY_MARK" lookup "$TPROXY_TABLE" priority 99
     fi
 
-    if ! ip route show table "$TPROXY_TABLE" | grep -q "local 0.0.0.0/0 dev lo"; then
-        ip route add local 0.0.0.0/0 dev lo table "$TPROXY_TABLE"
-    fi
+    # Use replace to ensure the route is set correctly without "File exists" error
+    ip route replace local 0.0.0.0/0 dev lo table "$TPROXY_TABLE"
 }
 
 setup_dns_redirect() {

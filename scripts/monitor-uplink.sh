@@ -11,7 +11,7 @@
 # File Created: 2025-12-27 22:40:47
 #
 # Modified By: mingcheng <mingcheng@apache.org>
-# Last Modified: 2025-12-29 08:21:46
+# Last Modified: 2025-12-30 21:01:46
 ##
 
 # Configuration
@@ -85,7 +85,6 @@ check_connectivity() {
 # --- Auto-Restore Logic ---
 # Check if interfaces are up but missing routing tables (e.g. after reconnect)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SETUP_SCRIPT="$SCRIPT_DIR/setup-multipath.sh"
 NEEDS_RESTORE=0
 
 check_restore_needed() {
@@ -116,13 +115,9 @@ if check_restore_needed "$IF2" "$TABLE2"; then NEEDS_RESTORE=1; fi
 
 if [ "$NEEDS_RESTORE" -eq 1 ]; then
     echo "Detected missing routing tables. Attempting to restore multipath configuration..."
-    if [ -f "$SETUP_SCRIPT" ]; then
-        bash "$SETUP_SCRIPT"
-        # Wait a moment for routes to settle
-        sleep 1
-    else
-        echo "Error: Setup script not found at $SETUP_SCRIPT"
-    fi
+    systemctl restart multipath-routing.service
+    sleep 5 # Wait a bit for routes to be set
+    systemctl restart tproxy-routing.service
 fi
 
 # Main logic
