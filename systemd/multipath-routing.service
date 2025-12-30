@@ -2,10 +2,11 @@
 Description=Multipath Routing Setup
 After=network-online.target
 Wants=network-online.target
-Before=tproxy-firewall.service
+Before=tproxy-firewall.service docker.service
 
 [Service]
 Type=oneshot
+ExecStartPre=/bin/sleep 30
 ExecStart=/root/faure.sh/scripts/setup-multipath.sh
 RemainAfterExit=yes
 

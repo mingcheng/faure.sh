@@ -46,7 +46,7 @@ if [ "$(id -u)" -ne 0 ]; then
 fi
 
 # Check required commands
-for cmd in iptables ip; do
+for cmd in iptables ip ss; do
     if ! command -v "$cmd" &> /dev/null; then
         log_error "Command '$cmd' is required but not found."
         exit 1
@@ -87,9 +87,8 @@ cleanup_firewall() {
     iptables -t mangle -X CLASH_TPROXY 2>/dev/null || true
 
     # Remove routing rules
-    while ip rule show | grep -q "fwmark $TPROXY_MARK lookup $TPROXY_TABLE"; do
-        ip rule del fwmark "$TPROXY_MARK" lookup "$TPROXY_TABLE"
-    done
+    # Blindly delete the rule until it's gone. No grep needed.
+    while ip rule del fwmark "$TPROXY_MARK" lookup "$TPROXY_TABLE" 2>/dev/null; do :; done
 
     # Flush the table to ensure it's clean
     ip route flush table "$TPROXY_TABLE" 2>/dev/null || true
@@ -132,9 +131,9 @@ setup_routing() {
     log_info "Setting up routing rules (Table: $TPROXY_TABLE)..."
 
     # Set up routing for marked packets (Use priority 99, before multipath rules)
-    if ! ip rule show | grep -q "fwmark $TPROXY_MARK lookup $TPROXY_TABLE"; then
-        ip rule add fwmark "$TPROXY_MARK" lookup "$TPROXY_TABLE" priority 99
-    fi
+    # Delete first to ensure no duplicates and no "File exists" error
+    ip rule del fwmark "$TPROXY_MARK" lookup "$TPROXY_TABLE" priority 99 2>/dev/null || true
+    ip rule add fwmark "$TPROXY_MARK" lookup "$TPROXY_TABLE" priority 99
 
     # Use replace to ensure the route is set correctly without "File exists" error
     ip route replace local 0.0.0.0/0 dev lo table "$TPROXY_TABLE"
