@@ -110,6 +110,25 @@ check_connection() {
 
 echo "Configuring multipath routing..."
 
+# Wait for network initialization (up to 60 seconds)
+# This prevents the script from failing immediately at boot if DHCP is slow
+MAX_RETRIES=30
+RETRY_DELAY=2
+count=0
+
+while [ $count -lt $MAX_RETRIES ]; do
+    IP1=$(get_ip $IF1)
+    IP2=$(get_ip $IF2)
+
+    if [ -n "$IP1" ] || [ -n "$IP2" ]; then
+        break
+    fi
+
+    echo "Waiting for network interfaces to obtain IP addresses... ($((count+1))/$MAX_RETRIES)"
+    sleep $RETRY_DELAY
+    count=$((count+1))
+done
+
 IP1=$(get_ip $IF1)
 IP2=$(get_ip $IF2)
 
