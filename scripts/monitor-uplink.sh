@@ -44,10 +44,10 @@ get_gateway() {
          gw=$(ip route show dev $iface 2>/dev/null | grep "default via" | awk '{print $3}')
     fi
 
-    # 3. DHCP fallback
-    if [ -z "$gw" ]; then
-         gw=$(ip route show dev $iface proto dhcp scope link 2>/dev/null | awk '{print $1}' | head -n 1)
-    fi
+    # 3. DHCP fallback - REMOVED
+    # Previous logic incorrectly returned subnet CIDR (scope link) instead of gateway IP.
+    # If no default route exists in main table, we cannot safely guess the gateway.
+    # The script will retry until the system (DHCP) installs a default route.
 
     # 4. Fallback for eth0 (static)
     if [ -z "$gw" ] && [ "$iface" == "eth0" ]; then
