@@ -27,6 +27,11 @@ WEIGHT2=1
 # State file to avoid flapping/unnecessary updates
 STATE_FILE="/run/uplink_status"
 
+# Function to get IP address
+get_ip() {
+    ip -4 addr show $1 | grep -oP '(?<=inet\s)\d+(\.\d+){3}' | head -n 1
+}
+
 # Function to get Gateway IP for an interface
 get_gateway() {
     local iface=$1
@@ -116,6 +121,27 @@ check_restore_needed() {
     fi
     return 1 # No restore needed
 }
+
+# Wait for network initialization (up to 60 seconds)
+MAX_RETRIES=30
+RETRY_DELAY=2
+count=0
+
+while [ $count -lt $MAX_RETRIES ]; do
+    IP1=$(get_ip $IF1)
+    IP2=$(get_ip $IF2)
+
+    if [ -n "$IP1" ] || [ -n "$IP2" ]; then
+        break
+    fi
+
+    # Only log periodically to avoid spamming journal
+    if [ $((count % 5)) -eq 0 ]; then
+        echo "Waiting for network interfaces to obtain IP addresses... ($((count+1))/$MAX_RETRIES)"
+    fi
+    sleep $RETRY_DELAY
+    count=$((count+1))
+done
 
 if check_restore_needed "$IF1" "$TABLE1"; then NEEDS_RESTORE=1; fi
 if check_restore_needed "$IF2" "$TABLE2"; then NEEDS_RESTORE=1; fi
