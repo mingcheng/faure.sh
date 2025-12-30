@@ -11,7 +11,7 @@
 # File Created: 2025-12-27 23:13:18
 #
 # Modified By: mingcheng <mingcheng@apache.org>
-# Last Modified: 2025-12-29 08:21:53
+# Last Modified: 2025-12-30 21:59:53
 ##
 
 # Exit on error
@@ -69,6 +69,41 @@ get_gateway() {
     fi
 
     echo "$gw"
+}
+
+check_connection() {
+    local iface=$1
+    local gw=$2
+    local targets=("223.5.5.5" "119.29.29.29")
+
+    if [ -z "$gw" ]; then return 1; fi
+
+    echo "Verifying connectivity for $iface via $gw..."
+
+    local success=0
+    for target in "${targets[@]}"; do
+        # Add temporary host route to ensure traffic goes out this interface/gateway
+        ip route add "$target" via "$gw" dev "$iface" 2>/dev/null || true
+
+        if ping -c 1 -W 2 -I "$iface" "$target" >/dev/null 2>&1; then
+            echo "  - $target: UP"
+            success=1
+        else
+            echo "  - $target: DOWN"
+        fi
+
+        # Clean up
+        ip route del "$target" via "$gw" dev "$iface" 2>/dev/null || true
+
+        if [ "$success" -eq 1 ]; then break; fi
+    done
+
+    if [ "$success" -eq 1 ]; then
+        return 0
+    else
+        echo "Warning: $iface failed connectivity check."
+        return 1
+    fi
 }
 
 # --- Execution ---
@@ -134,6 +169,23 @@ if [ "$HAS_IF2" -eq 1 ]; then
     else
         echo "$IF2 Gateway: $GW2"
     fi
+fi
+
+# --- Connectivity Check ---
+if [ "$HAS_IF1" -eq 1 ]; then
+    if ! check_connection "$IF1" "$GW1"; then
+        HAS_IF1=0
+    fi
+fi
+
+if [ "$HAS_IF2" -eq 1 ]; then
+    if ! check_connection "$IF2" "$GW2"; then
+        HAS_IF2=0
+    fi
+fi
+
+if [ "$HAS_IF1" -eq 0 ] && [ "$HAS_IF2" -eq 0 ]; then
+    echo "Error: No interfaces have internet connectivity. Proceeding to clear routing."
 fi
 
 # Flush old routing table rules

@@ -11,7 +11,7 @@
 # File Created: 2025-12-27 22:40:47
 #
 # Modified By: mingcheng <mingcheng@apache.org>
-# Last Modified: 2025-12-30 21:01:46
+# Last Modified: 2025-12-30 22:09:24
 ##
 
 # Configuration
@@ -19,7 +19,7 @@ IF1="eth0"
 IF2="eth1"
 TABLE1="100"
 TABLE2="101"
-CHECK_TARGETS=("8.8.8.8" "1.1.1.1" "223.5.5.5" "119.29.29.29")
+CHECK_TARGETS=("223.5.5.5" "119.29.29.29")
 CHECK_TIMEOUT=2
 WEIGHT1=1
 WEIGHT2=1
@@ -161,34 +161,14 @@ fi
 if [ "$NEW_STATE" != "$OLD_STATE" ]; then
     echo "State changed from '$OLD_STATE' to '$NEW_STATE'. Updating routing..."
 
-    case "$NEW_STATE" in
-        "BOTH")
-            if [ -n "$GW1" ] && [ -n "$GW2" ]; then
-                ip route replace default scope global \
-                    nexthop via $GW1 dev $IF1 weight $WEIGHT1 \
-                    nexthop via $GW2 dev $IF2 weight $WEIGHT2
-            fi
-            ;;
-        "IF1_ONLY")
-            if [ -n "$GW1" ]; then
-                ip route replace default via $GW1 dev $IF1
-            fi
-            ;;
-        "IF2_ONLY")
-            if [ -n "$GW2" ]; then
-                ip route replace default via $GW2 dev $IF2
-            fi
-            ;;
-        "NONE")
-            echo "All uplinks down!"
-            ;;
-    esac
+    # Trigger the setup script to re-configure routing based on current availability
+    systemctl restart multipath-routing.service
+
+    # Restart TProxy to ensure rules priority and chains are correct
+    systemctl restart tproxy-routing.service
 
     # Save new state
     echo "$NEW_STATE" > "$STATE_FILE"
-
-    # Flush cache
-    ip route flush cache
 else
     echo "State unchanged."
 fi
