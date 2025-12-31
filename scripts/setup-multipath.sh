@@ -26,89 +26,13 @@ LAN_NET="172.16.1.0/24"
 TABLE1="100"
 TABLE2="101"
 
-# --- Helper Functions ---
-get_ip() {
-    ip -4 addr show $1 | grep -oP '(?<=inet\s)\d+(\.\d+){3}' | head -n 1
-}
-
-get_subnet() {
-    ip route show dev $1 scope link | grep -v "linkdown" | awk '{print $1}' | head -n 1
-}
-
-get_gateway() {
-    local iface=$1
-    local gw=""
-
-    # 1. Try specific tables first (most reliable)
-    if [ "$iface" == "$IF1" ]; then
-         gw=$(ip route show table $TABLE1 2>/dev/null | grep default | awk '{print $3}')
-    elif [ "$iface" == "$IF2" ]; then
-         gw=$(ip route show table $TABLE2 2>/dev/null | grep default | awk '{print $3}')
-    fi
-
-    # 2. If not found, try main table (handle simple 'default via')
-    if [ -z "$gw" ]; then
-         gw=$(ip route show dev $iface 2>/dev/null | grep "default via" | awk '{print $3}')
-    fi
-
-    # 3. DHCP fallback (Heuristic)
-    if [ -z "$gw" ]; then
-         # Get the subnet from scope link (e.g., 192.168.66.0/24)
-         local subnet=$(ip route show dev $iface proto kernel scope link 2>/dev/null | awk '{print $1}' | head -n 1)
-         if [ -n "$subnet" ]; then
-             # Assume gateway is the .1 address of the subnet
-             # This works for standard /24 networks commonly used in tethering/routers
-             local prefix=$(echo "$subnet" | cut -d. -f1-3)
-             gw="${prefix}.1"
-         fi
-    fi
-
-    # 4. Fallback for eth0 (static)
-    if [ -z "$gw" ] && [ "$iface" == "eth0" ]; then
-        gw="172.16.1.1"
-    fi
-
-    echo "$gw"
-}
-
-check_connection() {
-    local iface=$1
-    local gw=$2
-    local targets=("223.5.5.5" "119.29.29.29")
-
-    if [ -z "$gw" ]; then return 1; fi
-
-    echo "Verifying connectivity for $iface via $gw..."
-
-    local success=0
-    for target in "${targets[@]}"; do
-        # Add temporary host route to ensure traffic goes out this interface/gateway
-        ip route add "$target" via "$gw" dev "$iface" 2>/dev/null || true
-
-        if ping -c 1 -W 2 -I "$iface" "$target" >/dev/null 2>&1; then
-            echo "  - $target: UP"
-            success=1
-        else
-            echo "  - $target: DOWN"
-        fi
-
-        # Clean up
-        ip route del "$target" via "$gw" dev "$iface" 2>/dev/null || true
-
-        if [ "$success" -eq 1 ]; then break; fi
-    done
-
-    if [ "$success" -eq 1 ]; then
-        return 0
-    else
-        echo "Warning: $iface failed connectivity check."
-        return 1
-    fi
-}
+# Source utility functions
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/utils.sh"
 
 # --- Execution ---
 
-echo "Configuring multipath routing..."
+log_info "Configuring multipath routing..."
 
 # Wait for network initialization (up to 60 seconds)
 # This prevents the script from failing immediately at boot if DHCP is slow
@@ -124,7 +48,7 @@ while [ $count -lt $MAX_RETRIES ]; do
         break
     fi
 
-    echo "Waiting for network interfaces to obtain IP addresses... ($((count+1))/$MAX_RETRIES)"
+    log_info "Waiting for network interfaces to obtain IP addresses... ($((count+1))/$MAX_RETRIES)"
     sleep $RETRY_DELAY
     count=$((count+1))
 done
@@ -137,21 +61,21 @@ HAS_IF1=0
 HAS_IF2=0
 
 if [ -n "$IP1" ]; then
-    echo "$IF1 IP: $IP1"
+    log_info "$IF1 IP: $IP1"
     HAS_IF1=1
 else
-    echo "Warning: No IP for $IF1. Skipping $IF1 configuration."
+    log_warn "No IP for $IF1. Skipping $IF1 configuration."
 fi
 
 if [ -n "$IP2" ]; then
-    echo "$IF2 IP: $IP2"
+    log_info "$IF2 IP: $IP2"
     HAS_IF2=1
 else
-    echo "Warning: No IP for $IF2. Skipping $IF2 configuration."
+    log_warn "No IP for $IF2. Skipping $IF2 configuration."
 fi
 
 if [ "$HAS_IF1" -eq 0 ] && [ "$HAS_IF2" -eq 0 ]; then
-    echo "Error: Neither $IF1 nor $IF2 has an IP address. Exiting."
+    log_error "Neither $IF1 nor $IF2 has an IP address. Exiting."
     exit 1
 fi
 
@@ -160,61 +84,69 @@ SUBNET1=""
 SUBNET2=""
 if [ "$HAS_IF1" -eq 1 ]; then
     SUBNET1=$(get_subnet $IF1)
-    echo "$IF1 Subnet: $SUBNET1"
+    log_info "$IF1 Subnet: $SUBNET1"
 fi
 if [ "$HAS_IF2" -eq 1 ]; then
     SUBNET2=$(get_subnet $IF2)
-    echo "$IF2 Subnet: $SUBNET2"
+    log_info "$IF2 Subnet: $SUBNET2"
 fi
 
 # Detect Gateways
 GW1=""
 GW2=""
 if [ "$HAS_IF1" -eq 1 ]; then
-    GW1=$(get_gateway $IF1)
+    GW1=$(get_gateway $IF1 $TABLE1)
     if [ -z "$GW1" ]; then
-        echo "Error: No Gateway for $IF1"
+        log_error "No Gateway for $IF1"
         HAS_IF1=0
     else
-        echo "$IF1 Gateway: $GW1"
+        log_info "$IF1 Gateway: $GW1"
     fi
 fi
 
 if [ "$HAS_IF2" -eq 1 ]; then
-    GW2=$(get_gateway $IF2)
+    GW2=$(get_gateway $IF2 $TABLE2)
     if [ -z "$GW2" ]; then
-        echo "Error: No Gateway for $IF2"
+        log_error "No Gateway for $IF2"
         HAS_IF2=0
     else
-        echo "$IF2 Gateway: $GW2"
+        log_info "$IF2 Gateway: $GW2"
     fi
 fi
 
 # --- Connectivity Check ---
 if [ "$HAS_IF1" -eq 1 ]; then
-    if ! check_connection "$IF1" "$GW1"; then
+    log_info "Verifying connectivity for $IF1 via $GW1..."
+    if check_connectivity "$IF1" "$GW1"; then
+        log_info "$IF1 is UP"
+    else
+        log_warn "$IF1 failed connectivity check."
         HAS_IF1=0
     fi
 fi
 
 if [ "$HAS_IF2" -eq 1 ]; then
-    if ! check_connection "$IF2" "$GW2"; then
+    log_info "Verifying connectivity for $IF2 via $GW2..."
+    if check_connectivity "$IF2" "$GW2"; then
+        log_info "$IF2 is UP"
+    else
+        log_warn "$IF2 failed connectivity check."
         HAS_IF2=0
     fi
 fi
 
 if [ "$HAS_IF1" -eq 0 ] && [ "$HAS_IF2" -eq 0 ]; then
-    echo "Error: No interfaces have internet connectivity. Proceeding to clear routing."
+    log_error "No interfaces have internet connectivity. Proceeding to clear routing."
 fi
 
 # Flush old routing table rules
-echo "Flushing old routing tables..."
+log_info "Flushing old routing tables..."
 ip route flush table $TABLE1 2>/dev/null || true
 ip route flush table $TABLE2 2>/dev/null || true
 
 # Configure Table 1 ($IF1)
 if [ "$HAS_IF1" -eq 1 ]; then
-    echo "Configuring route table $TABLE1..."
+    log_info "Configuring route table $TABLE1..."
     # Add local subnet routes to table to ensure local traffic works
     [ -n "$SUBNET1" ] && ip route add $SUBNET1 dev $IF1 table $TABLE1
     [ -n "$SUBNET2" ] && ip route add $SUBNET2 dev $IF2 table $TABLE1 2>/dev/null || true
@@ -223,20 +155,20 @@ fi
 
 # Configure Table 2 ($IF2)
 if [ "$HAS_IF2" -eq 1 ]; then
-    echo "Configuring route table $TABLE2..."
+    log_info "Configuring route table $TABLE2..."
     [ -n "$SUBNET1" ] && ip route add $SUBNET1 dev $IF1 table $TABLE2 2>/dev/null || true
     [ -n "$SUBNET2" ] && ip route add $SUBNET2 dev $IF2 src $IP2 table $TABLE2
     ip route add default via $GW2 dev $IF2 table $TABLE2
 fi
 
 # Cleanup old policy routing rules
-echo "Cleaning up old policy rules..."
+log_info "Cleaning up old policy rules..."
 # Delete all rules with specific priorities to handle IP changes cleanly
 while ip rule del priority 100 2>/dev/null; do :; done
 while ip rule del priority 101 2>/dev/null; do :; done
 
 # Add new policy routing rules
-echo "Adding new policy rules..."
+log_info "Adding new policy rules..."
 if [ "$HAS_IF1" -eq 1 ]; then
     ip rule add from $IP1 table $TABLE1 priority 100
 fi
@@ -247,7 +179,7 @@ if [ "$HAS_IF2" -eq 1 ]; then
 fi
 
 # --- Docker/NAT Compatibility (Connection Marking) ---
-echo "Configuring connection marking..."
+log_info "Configuring connection marking..."
 MARK1="0x100"
 MARK2="0x200"
 
@@ -276,7 +208,7 @@ ip rule add fwmark $MARK1 table $TABLE1 priority 90
 ip rule add fwmark $MARK2 table $TABLE2 priority 91
 
 # Update main routing table
-echo "Updating main routing table..."
+log_info "Updating main routing table..."
 ip route del default 2>/dev/null || true
 # Ensure main table has routes to gateways (needed for nexthop)
 if [ "$HAS_IF1" -eq 1 ]; then
@@ -286,7 +218,7 @@ if [ "$HAS_IF2" -eq 1 ]; then
     ip route replace $GW2 dev $IF2 2>/dev/null || true
 fi
 
-echo "Adding default route..."
+log_info "Adding default route..."
 if [ "$HAS_IF1" -eq 1 ] && [ "$HAS_IF2" -eq 1 ]; then
     ip route add default scope global \
         nexthop via $GW1 dev $IF1 weight 1 \
@@ -298,7 +230,7 @@ elif [ "$HAS_IF2" -eq 1 ]; then
 fi
 
 # NAT
-echo "Configuring NAT..."
+log_info "Configuring NAT..."
 if [ "$HAS_IF1" -eq 1 ]; then
     iptables -t nat -D POSTROUTING -o $IF1 -j MASQUERADE 2>/dev/null || true
     iptables -t nat -A POSTROUTING -o $IF1 -j MASQUERADE
@@ -309,4 +241,4 @@ if [ "$HAS_IF2" -eq 1 ]; then
 fi
 
 ip route flush cache
-echo "Multipath routing configured successfully"
+log_info "Multipath routing configured successfully"

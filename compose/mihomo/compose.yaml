@@ -1,6 +1,6 @@
 services:
   mihomo:
-    image: docker.1ms.run/metacubex/mihomo:v1.19.17
+    image: docker.1ms.run/metacubex/mihomo
     container_name: mihomo
     environment:
       TZ: "Asia/Shanghai"
@@ -33,7 +33,7 @@ services:
     depends_on:
       - mihomo
     container_name: zashboard
-    image: ghcr.io/zephyruso/zashboard:v2.4.1
+    image: ghcr.io/zephyruso/zashboard
     restart: unless-stopped
     ports:
       - "8080:80"
