@@ -1,9 +1,10 @@
 [Unit]
-Description=Run Uplink Monitor every 30 seconds
+Description=Run Uplink Monitor every 5 minutes
+After=network-online.target
 
 [Timer]
 OnBootSec=1min
-OnUnitActiveSec=60s
+OnUnitActiveSec=5min
 
 [Install]
 WantedBy=timers.target

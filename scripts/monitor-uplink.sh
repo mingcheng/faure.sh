@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Copyright (c) 2025 mingcheng <mingcheng@apache.org>
+# Copyright (c) 2025-2026 mingcheng <mingcheng@apache.org>
 #
 # Monitor uplink status and update multipath routing
 #
@@ -11,7 +11,7 @@
 # File Created: 2025-12-27 22:40:47
 #
 # Modified By: mingcheng <mingcheng@apache.org>
-# Last Modified: 2025-12-30 22:09:24
+# Last Modified: 2026-01-09 16:32:59
 ##
 
 # Source utility functions

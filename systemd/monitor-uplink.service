@@ -1,6 +1,6 @@
 [Unit]
 Description=Monitor Uplink Connectivity and Update Routing
-#After=multipath-routing.service tproxy-routing.service
+After=network-online.target
 
 [Service]
 Type=oneshot
