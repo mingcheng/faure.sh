@@ -114,13 +114,17 @@ if [ "$HAS_IF2" -eq 1 ]; then
 fi
 
 # --- Connectivity Check ---
+IF1_UP=0
+IF2_UP=0
+
 if [ "$HAS_IF1" -eq 1 ]; then
     log_info "Verifying connectivity for $IF1 via $GW1..."
     if check_connectivity "$IF1" "$GW1"; then
         log_info "$IF1 is UP"
+        IF1_UP=1
     else
-        log_warn "$IF1 failed connectivity check."
-        HAS_IF1=0
+        log_warn "$IF1 failed connectivity check (Traffic will be routed but excluded from load balancing)."
+        # We KEEP HAS_IF1=1 so that we can still access the interface for debugging/recovery
     fi
 fi
 
@@ -128,13 +132,14 @@ if [ "$HAS_IF2" -eq 1 ]; then
     log_info "Verifying connectivity for $IF2 via $GW2..."
     if check_connectivity "$IF2" "$GW2"; then
         log_info "$IF2 is UP"
+        IF2_UP=1
     else
-        log_warn "$IF2 failed connectivity check."
-        HAS_IF2=0
+        log_warn "$IF2 failed connectivity check (Traffic will be routed but excluded from load balancing)."
+        # KEEP HAS_IF2=1
     fi
 fi
 
-if [ "$HAS_IF1" -eq 0 ] && [ "$HAS_IF2" -eq 0 ]; then
+if [ "$IF1_UP" -eq 0 ] && [ "$IF2_UP" -eq 0 ]; then
     log_error "No interfaces have internet connectivity. Proceeding to clear routing."
 fi
 
@@ -147,9 +152,10 @@ ip route flush table $TABLE2 2>/dev/null || true
 if [ "$HAS_IF1" -eq 1 ]; then
     log_info "Configuring route table $TABLE1..."
     # Add local subnet routes to table to ensure local traffic works
-    [ -n "$SUBNET1" ] && ip route add $SUBNET1 dev $IF1 table $TABLE1
+    # Use src hint to ensure correct source IP selection
+    [ -n "$SUBNET1" ] && ip route add $SUBNET1 dev $IF1 src $IP1 table $TABLE1
     [ -n "$SUBNET2" ] && ip route add $SUBNET2 dev $IF2 table $TABLE1 2>/dev/null || true
-    ip route add default via $GW1 dev $IF1 table $TABLE1
+    ip route add default via $GW1 dev $IF1 src $IP1 table $TABLE1
 fi
 
 # Configure Table 2 ($IF2)
@@ -157,7 +163,7 @@ if [ "$HAS_IF2" -eq 1 ]; then
     log_info "Configuring route table $TABLE2..."
     [ -n "$SUBNET1" ] && ip route add $SUBNET1 dev $IF1 table $TABLE2 2>/dev/null || true
     [ -n "$SUBNET2" ] && ip route add $SUBNET2 dev $IF2 src $IP2 table $TABLE2
-    ip route add default via $GW2 dev $IF2 table $TABLE2
+    ip route add default via $GW2 dev $IF2 src $IP2 table $TABLE2
 fi
 
 # Cleanup old policy routing rules
@@ -218,24 +224,28 @@ if [ "$HAS_IF2" -eq 1 ]; then
 fi
 
 log_info "Adding default route..."
-if [ "$HAS_IF1" -eq 1 ] && [ "$HAS_IF2" -eq 1 ]; then
+if [ "$IF1_UP" -eq 1 ] && [ "$IF2_UP" -eq 1 ]; then
     ip route add default scope global \
         nexthop via $GW1 dev $IF1 weight 1 \
         nexthop via $GW2 dev $IF2 weight 1
-elif [ "$HAS_IF1" -eq 1 ]; then
-    ip route add default via $GW1 dev $IF1
-elif [ "$HAS_IF2" -eq 1 ]; then
-    ip route add default via $GW2 dev $IF2
+elif [ "$IF1_UP" -eq 1 ]; then
+    ip route add default via $GW1 dev $IF1 src $IP1
+elif [ "$IF2_UP" -eq 1 ]; then
+    ip route add default via $GW2 dev $IF2 src $IP2
 fi
+
+# Enable IP Forwarding explicitly
+sysctl -w net.ipv4.ip_forward=1 >/dev/null 2>&1 || log_warn "Failed to enable IP forwarding via sysctl"
 
 # NAT
 log_info "Configuring NAT..."
 if [ "$HAS_IF1" -eq 1 ]; then
-    iptables -t nat -D POSTROUTING -o $IF1 -j MASQUERADE 2>/dev/null || true
+    # Clean up any existing rules to avoid duplicates
+    while iptables -t nat -D POSTROUTING -o $IF1 -j MASQUERADE 2>/dev/null; do :; done
     iptables -t nat -A POSTROUTING -o $IF1 -j MASQUERADE
 fi
 if [ "$HAS_IF2" -eq 1 ]; then
-    iptables -t nat -D POSTROUTING -o $IF2 -j MASQUERADE 2>/dev/null || true
+    while iptables -t nat -D POSTROUTING -o $IF2 -j MASQUERADE 2>/dev/null; do :; done
     iptables -t nat -A POSTROUTING -o $IF2 -j MASQUERADE
 fi
 
