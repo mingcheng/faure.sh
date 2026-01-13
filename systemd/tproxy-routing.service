@@ -6,6 +6,7 @@ Requires=multipath-routing.service
 [Service]
 Type=oneshot
 ExecStart=/root/faure.sh/scripts/setup-tproxy.sh
+TimeoutStartSec=180
 RemainAfterExit=yes
 
 [Install]

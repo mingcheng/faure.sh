@@ -48,22 +48,38 @@ done
 # Ensure Clash/TProxy listeners exist; otherwise adding redirect rules will blackhole TCP/UDP
 check_listeners() {
     local tcp_listen udp53_listen
+    local max_retries=60
+    local retry_delay=2
+    local count=0
 
-    tcp_listen=$(ss -lnt sport = ":$FAURE_TPORT" | tail -n +2 | wc -l)
-    udp53_listen=$(ss -lnu sport = ":53" | tail -n +2 | wc -l)
+    log_info "Waiting for TProxy listeners (TCP:$FAURE_TPORT, UDP:53)..."
+
+    while [ $count -lt $max_retries ]; do
+        tcp_listen=$(ss -lnt sport = ":$FAURE_TPORT" | tail -n +2 | wc -l)
+        udp53_listen=$(ss -lnu sport = ":53" | tail -n +2 | wc -l)
+
+        if [ "$tcp_listen" -gt 0 ] && [ "$udp53_listen" -gt 0 ]; then
+            log_info "TProxy listeners detected (TCP:$FAURE_TPORT, UDP:53)."
+            return 0
+        fi
+
+        if [ $((count % 5)) -eq 0 ]; then
+             log_info "Waiting for listeners... ($((count+1))/$max_retries)"
+        fi
+
+        sleep $retry_delay
+        count=$((count+1))
+    done
 
     if [ "$tcp_listen" -eq 0 ]; then
         log_error "No process listening on TCP port $FAURE_TPORT (expected Clash TProxy)."
-        return 1
     fi
 
     if [ "$udp53_listen" -eq 0 ]; then
         log_warn "No process listening on UDP/53 (DNS). DNS redirection will fail."
-        # DNS 缺失会导致整体不可用，直接视为错误以避免陷入无解析状态
-        return 1
     fi
 
-    return 0
+    return 1
 }
 
 # Cleanup function to remove existing rules
