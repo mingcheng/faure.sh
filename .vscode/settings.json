@@ -4,11 +4,17 @@
     "*.json_": "json",
     "*.yml_": "yaml"
   },
+  "editor.fontFamily": "Dank Mono",
   "editor.fontSize": 12,
   "editor.tabSize": 2,
   "editor.wordWrap": "on",
   "editor.formatOnSave": true,
   "files.autoSave": "onFocusChange",
+  "psi-header.config": {
+    "author": "mingcheng",
+    "authorEmail": "mingcheng@apache.org",
+    "company": "mingcheng <mingcheng@apache.org>",
+  },
   "[yaml]": {
     "editor.insertSpaces": true,
     "editor.tabSize": 2,
