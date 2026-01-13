@@ -3,7 +3,7 @@ Description=Run Uplink Monitor every 5 minutes
 After=network-online.target
 
 [Timer]
-OnBootSec=1min
+OnBootSec=5min
 OnUnitActiveSec=5min
 
 [Install]
