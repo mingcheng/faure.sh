@@ -6,7 +6,7 @@ Before=tproxy-firewall.service
 
 [Service]
 Type=oneshot
-ExecStartPre=/bin/sleep 30
+ExecStartPre=/bin/sleep 5
 ExecStart=/root/faure.sh/scripts/setup-multipath.sh
 RemainAfterExit=yes
 
