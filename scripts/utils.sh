@@ -134,3 +134,31 @@ check_connectivity() {
         return 1
     fi
 }
+
+# Wait for network interface to obtain an IP address
+# Usage: wait_for_ip <interface> [max_retries] [retry_delay]
+wait_for_ip() {
+    local iface=$1
+    local max_retries=${2:-30}
+    local retry_delay=${3:-2}
+    local count=0
+
+    while [ $count -lt $max_retries ]; do
+        local ip_addr
+        ip_addr=$(get_ip "$iface")
+
+        if [ -n "$ip_addr" ]; then
+            return 0
+        fi
+
+        # Only log periodically to avoid spamming journal
+        if [ $((count % 5)) -eq 0 ]; then
+             log_info "Waiting for interface $iface to obtain IP address... ($((count+1))/$max_retries)"
+        fi
+
+        sleep "$retry_delay"
+        count=$((count+1))
+    done
+
+    return 1
+}

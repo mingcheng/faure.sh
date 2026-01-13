@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Copyright (c) 2025 mingcheng <mingcheng@apache.org>
+# Copyright (c) 2025-2026 mingcheng <mingcheng@apache.org>
 #
 # Set up TPROXY firewall rules for Clash transparent proxying.
 #
@@ -11,7 +11,7 @@
 # File Created: 2025-03-19 14:32:47
 #
 # Modified By: mingcheng <mingcheng@apache.org>
-# Last Modified: 2025-12-29 08:21:59
+# Last Modified: 2026-01-13 23:43:55
 ##
 
 # Exit on error, undefined variable, or pipe failure
@@ -25,6 +25,7 @@ FAURE_INTERFACE="${FAURE_INTERFACE:-eth0}"
 FAURE_TPORT="${FAURE_TPORT:-8848}"
 TPROXY_TABLE="${TPROXY_TABLE:-200}"  # Use a different routing table to avoid conflicts
 TPROXY_MARK="0x1"
+CHAIN_NAME="MIHOMO_TPROXY" # Standardized chain name
 
 # Source utility functions
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -69,13 +70,20 @@ check_listeners() {
 cleanup_firewall() {
     log_info "Cleaning up existing firewall rules..."
 
-    # Remove mangle table rules
+    # Cleanup legacy CLASH_TPROXY if exists
     if iptables -t mangle -C PREROUTING -i "$FAURE_INTERFACE" -s "$FAURE_ADDR_RANGE" -j CLASH_TPROXY 2>/dev/null; then
-        iptables -t mangle -D PREROUTING -i "$FAURE_INTERFACE" -s "$FAURE_ADDR_RANGE" -j CLASH_TPROXY
+         iptables -t mangle -D PREROUTING -i "$FAURE_INTERFACE" -s "$FAURE_ADDR_RANGE" -j CLASH_TPROXY
     fi
-
     iptables -t mangle -F CLASH_TPROXY 2>/dev/null || true
     iptables -t mangle -X CLASH_TPROXY 2>/dev/null || true
+
+    # Remove mangle table rules for current chain
+    if iptables -t mangle -C PREROUTING -i "$FAURE_INTERFACE" -s "$FAURE_ADDR_RANGE" -j "$CHAIN_NAME" 2>/dev/null; then
+        iptables -t mangle -D PREROUTING -i "$FAURE_INTERFACE" -s "$FAURE_ADDR_RANGE" -j "$CHAIN_NAME"
+    fi
+
+    iptables -t mangle -F "$CHAIN_NAME" 2>/dev/null || true
+    iptables -t mangle -X "$CHAIN_NAME" 2>/dev/null || true
 
     # Remove routing rules
     # Blindly delete the rule until it's gone. No grep needed.
@@ -92,30 +100,30 @@ cleanup_firewall() {
 }
 
 setup_tproxy_chain() {
-    log_info "Creating CLASH_TPROXY chain..."
-    iptables -t mangle -N CLASH_TPROXY
+    log_info "Creating $CHAIN_NAME chain..."
+    iptables -t mangle -N "$CHAIN_NAME"
 
     # Exclude local and private networks
     local private_nets=("0.0.0.0/8" "10.0.0.0/8" "127.0.0.0/8" "169.254.0.0/16" "172.16.0.0/12" "192.168.0.0/16" "224.0.0.0/4" "240.0.0.0/4")
     for net in "${private_nets[@]}"; do
-        iptables -t mangle -A CLASH_TPROXY -d "$net" -j RETURN
+        iptables -t mangle -A "$CHAIN_NAME" -d "$net" -j RETURN
     done
 
     # Exclude broadcast
-    iptables -t mangle -A CLASH_TPROXY -d 255.255.255.255/32 -j RETURN
+    iptables -t mangle -A "$CHAIN_NAME" -d 255.255.255.255/32 -j RETURN
 
     # Mark and TPROXY for TCP
     log_info "Configuring TPROXY rules for TCP/UDP on port $FAURE_TPORT..."
-    iptables -t mangle -A CLASH_TPROXY -p tcp -j MARK --set-mark "$TPROXY_MARK"
-    iptables -t mangle -A CLASH_TPROXY -p tcp -j TPROXY --tproxy-mark "$TPROXY_MARK/$TPROXY_MARK" --on-port "$FAURE_TPORT"
+    iptables -t mangle -A "$CHAIN_NAME" -p tcp -j MARK --set-mark "$TPROXY_MARK"
+    iptables -t mangle -A "$CHAIN_NAME" -p tcp -j TPROXY --tproxy-mark "$TPROXY_MARK/$TPROXY_MARK" --on-port "$FAURE_TPORT"
 
     # Mark and TPROXY for UDP
-    iptables -t mangle -A CLASH_TPROXY -p udp -j MARK --set-mark "$TPROXY_MARK"
-    iptables -t mangle -A CLASH_TPROXY -p udp -j TPROXY --tproxy-mark "$TPROXY_MARK/$TPROXY_MARK" --on-port "$FAURE_TPORT"
+    iptables -t mangle -A "$CHAIN_NAME" -p udp -j MARK --set-mark "$TPROXY_MARK"
+    iptables -t mangle -A "$CHAIN_NAME" -p udp -j TPROXY --tproxy-mark "$TPROXY_MARK/$TPROXY_MARK" --on-port "$FAURE_TPORT"
 
     # Apply TPROXY chain only to traffic from FAURE_ADDR_RANGE
     log_info "Applying TPROXY chain to interface $FAURE_INTERFACE for range $FAURE_ADDR_RANGE..."
-    iptables -t mangle -A PREROUTING -i "$FAURE_INTERFACE" -s "$FAURE_ADDR_RANGE" -j CLASH_TPROXY
+    iptables -t mangle -A PREROUTING -i "$FAURE_INTERFACE" -s "$FAURE_ADDR_RANGE" -j "$CHAIN_NAME"
 }
 
 setup_routing() {
@@ -140,10 +148,10 @@ verify_setup() {
     echo ""
     log_info "=== Verification ==="
     echo "--- Mangle PREROUTING rules ---"
-    iptables -t mangle -L PREROUTING -n -v | grep CLASH_TPROXY || echo "No CLASH_TPROXY rules found in PREROUTING"
+    iptables -t mangle -L PREROUTING -n -v | grep "$CHAIN_NAME" || echo "No $CHAIN_NAME rules found in PREROUTING"
 
-    echo -e "\n--- CLASH_TPROXY chain ---"
-    iptables -t mangle -L CLASH_TPROXY -n -v
+    echo -e "\n--- $CHAIN_NAME chain ---"
+    iptables -t mangle -L "$CHAIN_NAME" -n -v
 
     echo -e "\n--- Routing rules ---"
     ip rule show | grep "$TPROXY_TABLE"

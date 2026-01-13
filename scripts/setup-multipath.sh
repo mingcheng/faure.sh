@@ -41,14 +41,13 @@ RETRY_DELAY=2
 count=0
 
 while [ $count -lt $MAX_RETRIES ]; do
-    IP1=$(get_ip $IF1)
-    IP2=$(get_ip $IF2)
-
-    if [ -n "$IP1" ] || [ -n "$IP2" ]; then
+    if [ -n "$(get_ip $IF1)" ] || [ -n "$(get_ip $IF2)" ]; then
         break
     fi
 
-    log_info "Waiting for network interfaces to obtain IP addresses... ($((count+1))/$MAX_RETRIES)"
+    if [ $((count % 5)) -eq 0 ]; then
+        log_info "Waiting for any interface to obtain IP address... ($((count+1))/$MAX_RETRIES)"
+    fi
     sleep $RETRY_DELAY
     count=$((count+1))
 done

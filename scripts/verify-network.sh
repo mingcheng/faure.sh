@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Copyright (c) 2025 mingcheng <mingcheng@apache.org>
+# Copyright (c) 2025-2026 mingcheng <mingcheng@apache.org>
 #
 # Verify network configuration for multipath routing and TProxy
 #
@@ -11,7 +11,7 @@
 # File Created: 2025-12-27 23:53:23
 #
 # Modified By: mingcheng <mingcheng@apache.org>
-# Last Modified: 2025-12-29 08:22:06
+# Last Modified: 2026-01-13 23:46:22
 ##
 
 # Colors
@@ -72,10 +72,10 @@ else
     log_fail "Chain MULTIPATH_MARK missing."
 fi
 
-if iptables -t mangle -L SINGBOX_TPROXY -n >/dev/null 2>&1; then
-    log_pass "Chain SINGBOX_TPROXY exists."
+if iptables -t mangle -L MIHOMO_TPROXY -n >/dev/null 2>&1; then
+    log_pass "Chain MIHOMO_TPROXY exists."
 else
-    log_warn "Chain SINGBOX_TPROXY missing (TProxy might not be running)."
+    log_warn "Chain MIHOMO_TPROXY missing (TProxy might not be running)."
 fi
 
 # Check PREROUTING hooks

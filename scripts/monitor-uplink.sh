@@ -40,7 +40,7 @@ check_restore_needed() {
     # Check if interface exists and is UP
     if ip link show "$iface" >/dev/null 2>&1; then
         # Check if it has an IP address
-        if ip -4 addr show "$iface" | grep -q "inet"; then
+        if ip -4 addr show "$iface" | grep -q "inet\b"; then
             # Check if its routing table is empty
             if [ -z "$(ip route show table $table 2>/dev/null | grep default)" ]; then
                 log_warn "Interface $iface is UP with IP, but Table $table is empty."
