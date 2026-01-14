@@ -214,7 +214,7 @@ ip rule add fwmark $MARK2 table $TABLE2 priority 91
 
 # Update main routing table
 log_info "Updating main routing table..."
-ip route del default 2>/dev/null || true
+while ip route del default 2>/dev/null; do :; done
 # Ensure main table has routes to gateways (needed for nexthop)
 if [ "$HAS_IF1" -eq 1 ]; then
     ip route replace $GW1 dev $IF1 2>/dev/null || true

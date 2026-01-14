@@ -1,5 +1,5 @@
 #!#
-# Copyright (c) 2025 mingcheng <mingcheng@apache.org>
+# Copyright (c) 2025-2026 mingcheng <mingcheng@apache.org>
 #
 # This source code is licensed under the MIT License,
 # which is located in the LICENSE file in the source tree's root directory.
@@ -9,7 +9,7 @@
 # File Created: 2025-12-28 11:20:34
 #
 # Modified By: mingcheng <mingcheng@apache.org>
-# Last Modified: 2025-12-29 08:20:46
+# Last Modified: 2026-01-14 08:17:58
 ##
 
 network:
@@ -34,9 +34,10 @@ network:
       match:
         driver: rndis_host
       set-name: eth1
+      optional: true
       dhcp4: true
       dhcp4-overrides:
-        use-routes: false
+        route-metric: 200
       dhcp6: true
       dhcp6-overrides:
-        use-routes: false
+        route-metric: 200
