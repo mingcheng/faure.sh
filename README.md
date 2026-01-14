@@ -45,6 +45,7 @@
     sudo ./verify.sh
     ```
 
+
 ### Configuration
 
 *   **Global Configuration**:
@@ -60,22 +61,14 @@
     */5 * * * * /root/faure.sh/scripts/monitor-traffic-limit.sh eth1 100 80
     ```
 
-## 📂 Core Components
-
-*   **`scripts/config.sh`**: Centralized configuration file for interface names, subnets, and routing constants.
-*   **`scripts/monitor-uplink.sh`**: The brain of the operation. Monitors WAN health and triggers routing updates.
-*   **`scripts/setup-multipath.sh`**: Configures routing tables (100/101), nexthops, and connection marking.
-*   **`scripts/setup-tproxy.sh`**: Manages TProxy firewall rules and chains.
-*   **`scripts/utils.sh`**: Shared library for logging and network helper functions.
-
-## � Logic Flow
+## Logic Flow
 
 The following diagram illustrates how `monitor-uplink.sh` maintains connectivity:
 
 ```mermaid
 graph TD
     Start[Timer Trigger] --> CheckIPs[Check Interface IPs]
-    CheckIPs -- Both IPs Present --> CheckConn[Check Connectivity (Ping)]
+    CheckIPs -- Both IPs Present --> CheckConn["Check Connectivity (Ping)"]
     CheckIPs -- Missing IP --> Wait[Wait/Retry]
 
     CheckConn -- Both UP --> StateBoth[State: BOTH]
@@ -97,6 +90,13 @@ graph TD
     SaveState --> End
 ```
 
+## 📂 Core Components
+
+*   **`scripts/config.sh`**: Centralized configuration file for interface names, subnets, and routing constants.
+*   **`scripts/monitor-uplink.sh`**: The brain of the operation. Monitors WAN health and triggers routing updates.
+*   **`scripts/setup-multipath.sh`**: Configures routing tables (100/101), nexthops, and connection marking.
+*   **`scripts/setup-tproxy.sh`**: Manages TProxy firewall rules and chains.
+*   **`scripts/utils.sh`**: Shared library for logging and network helper functions.
 
 ## License
 
