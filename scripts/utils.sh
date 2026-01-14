@@ -123,7 +123,7 @@ check_connectivity() {
     for target in "${targets[@]}"; do
         # If gateway is provided, add a temporary route to force traffic
         if [ -n "$gw" ]; then
-            ip route add "$target" via "$gw" dev "$iface" 2>/dev/null || true
+            ip route replace "$target" via "$gw" dev "$iface" 2>/dev/null || true
         fi
 
         # Use ping with interface binding
