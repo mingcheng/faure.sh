@@ -41,10 +41,26 @@ check_restore_needed() {
     if ip link show "$iface" >/dev/null 2>&1; then
         # Check if it has an IP address
         if ip -4 addr show "$iface" | grep -q "inet\b"; then
+            local route_entry
+            route_entry=$(ip route show table "$table" 2>/dev/null | grep default)
+
             # Check if its routing table is empty
-            if [ -z "$(ip route show table $table 2>/dev/null | grep default)" ]; then
+            if [ -z "$route_entry" ]; then
                 log_warn "Interface $iface is UP with IP, but Table $table is empty."
                 return 0 # Needs restore
+            fi
+
+            # Check if the gateway in the table is reachable (valid subnet)
+            # Assumes format: default via <GW> ...
+            local gw_in_table
+            gw_in_table=$(echo "$route_entry" | awk '{print $3}')
+
+            # If format is "default dev ...", gw_in_table is "dev"
+            if [ "$gw_in_table" != "dev" ] && [ -n "$gw_in_table" ]; then
+                 if ! ip route get "$gw_in_table" dev "$iface" >/dev/null 2>&1; then
+                     log_warn "Interface $iface is UP, but gateway $gw_in_table in Table $table is unreachable."
+                     return 0 # Needs restore
+                 fi
             fi
         else
             # Interface exists but no IP.

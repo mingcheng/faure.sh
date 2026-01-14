@@ -60,12 +60,23 @@ get_gateway() {
 
     # 1. Try specific table first (most reliable if already configured)
     if [ -n "$table" ]; then
-         gw=$(ip route show table "$table" 2>/dev/null | grep default | awk '{print $3}')
+         local candidate_gw
+         candidate_gw=$(ip route show table "$table" 2>/dev/null | grep default | awk '{print $3}')
+         # Validate if the gateway is reachable via the interface (subnet match)
+         if [ -n "$candidate_gw" ]; then
+             if ip route get "$candidate_gw" dev "$iface" >/dev/null 2>&1; then
+                 gw="$candidate_gw"
+             fi
+         fi
     fi
 
     # 2. If not found, try main table (handle simple 'default via')
     if [ -z "$gw" ]; then
-         gw=$(ip route show dev "$iface" 2>/dev/null | grep "default via" | awk '{print $3}')
+         local candidate_gw
+         candidate_gw=$(ip route show dev "$iface" 2>/dev/null | grep "default via" | awk '{print $3}')
+         if [ -n "$candidate_gw" ]; then
+             gw="$candidate_gw"
+         fi
     fi
 
     # 3. DHCP fallback (Heuristic)

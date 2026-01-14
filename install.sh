@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Copyright (c) 2025 Hangzhou Guanwaii Technology Co., Ltd.
+# Copyright (c) 2025-2026 mingcheng <mingcheng@apache.org>
 #
 # Install script for faure.sh
 #
@@ -13,7 +13,7 @@
 # File Created: 2025-12-28 16:31:58
 #
 # Modified By: mingcheng <mingcheng@apache.org>
-# Last Modified: 2025-12-28 23:23:47
+# Last Modified: 2026-01-14 00:42:42
 ##
 
 set -e
@@ -80,7 +80,7 @@ if [ -d "$PROJECT_DIR/systemd" ]; then
 
     # Enable and start services
     SERVICES=(
-        "monitor-uplink.service"
+        # "monitor-uplink.service"
         "monitor-uplink.timer"
         "multipath-routing.service"
         "tproxy-routing.service"
