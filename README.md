@@ -47,11 +47,11 @@
 
 ### Configuration
 
+*   **Global Configuration**:
+    Edit `scripts/config.sh` to define your network interfaces (`IF1`, `IF2`), LAN subnet (`LAN_NET`), and other routing parameters. This file is the central source of truth for all scripts.
+
 *   **Network Interfaces**:
     Edit `netplan/*.yaml` to match your static/DHCP requirements, then run `netplan apply`.
-
-*   **Proxy Settings**:
-    Modify `scripts/setup-tproxy.sh` if your LAN subnet differs from the default `172.16.1.0/24`.
 
 *   **Traffic Limiting (Optional)**:
     For metered connections (e.g., 4G/5G), add the monitor script to crontab:
@@ -62,11 +62,42 @@
 
 ## 📂 Core Components
 
+*   **`scripts/config.sh`**: Centralized configuration file for interface names, subnets, and routing constants.
 *   **`scripts/monitor-uplink.sh`**: The brain of the operation. Monitors WAN health and triggers routing updates.
 *   **`scripts/setup-multipath.sh`**: Configures routing tables (100/101), nexthops, and connection marking.
 *   **`scripts/setup-tproxy.sh`**: Manages TProxy firewall rules and chains.
 *   **`scripts/utils.sh`**: Shared library for logging and network helper functions.
 
-## 📄 License
+## � Logic Flow
 
-[MIT License](LICENSE)
+The following diagram illustrates how `monitor-uplink.sh` maintains connectivity:
+
+```mermaid
+graph TD
+    Start[Timer Trigger] --> CheckIPs[Check Interface IPs]
+    CheckIPs -- Both IPs Present --> CheckConn[Check Connectivity (Ping)]
+    CheckIPs -- Missing IP --> Wait[Wait/Retry]
+
+    CheckConn -- Both UP --> StateBoth[State: BOTH]
+    CheckConn -- IF1 UP Only --> StateIF1[State: IF1_ONLY]
+    CheckConn -- IF2 UP Only --> StateIF2[State: IF2_ONLY]
+    CheckConn -- Neither UP --> StateNone[State: NONE]
+
+    StateBoth --> ReadOld[Read Previous State]
+    StateIF1 --> ReadOld
+    StateIF2 --> ReadOld
+    StateNone --> ReadOld
+
+    ReadOld -- State Changed? --> Yes{Yes}
+    ReadOld -- No --> End[End]
+
+    Yes --> UpdateRoute[Restart multipath-routing.service]
+    UpdateRoute --> UpdateTProxy[Restart tproxy-routing.service]
+    UpdateTProxy --> SaveState[Save New State]
+    SaveState --> End
+```
+
+
+## License
+
+This project is licensed under the [MIT License](LICENSE), if you have any questions, please contact `mingcheng@apache.org`.
