@@ -114,7 +114,7 @@ check_iface() {
         log_warn "Interface $iface does not exist. Skipping."
         return
     fi
-    
+
     # Use get_ip from utils if available, else fallback
     local ip_addr
     if command -v get_ip >/dev/null; then
