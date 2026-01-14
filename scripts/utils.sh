@@ -14,6 +14,15 @@
 # Last Modified: 2025-12-31 10:38:55
 ##
 
+# Source utility functions
+# SCRIPT_DIR is determined by the caller script mostly, but here we can try to find config
+# if utils.sh is sourced, BASH_SOURCE[0] is utils.sh
+
+# Load configuration if available
+if [ -f "$(dirname "${BASH_SOURCE[0]}")/config.sh" ]; then
+    source "$(dirname "${BASH_SOURCE[0]}")/config.sh"
+fi
+
 # --- Logging Functions ---
 
 # Colors

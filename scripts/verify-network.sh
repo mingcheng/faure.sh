@@ -14,6 +14,20 @@
 # Last Modified: 2026-01-13 23:46:22
 ##
 
+# Source utility functions to get config
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [ -f "$SCRIPT_DIR/utils.sh" ]; then
+    source "$SCRIPT_DIR/utils.sh"
+fi
+# Note: utils.sh sources config.sh
+
+# Defaults if config not loaded
+IF1="${IF1:-eth0}"
+IF2="${IF2:-eth1}"
+TABLE1="${TABLE1:-100}"
+TABLE2="${TABLE2:-101}"
+TPROXY_TABLE="${TPROXY_TABLE:-200}"
+
 # Colors
 GREEN='\033[0;32m'
 RED='\033[0;31m'
@@ -56,11 +70,11 @@ check_rule() {
     fi
 }
 
-check_rule "90" "Fwmark 0x100 -> Table 100"
-check_rule "91" "Fwmark 0x200 -> Table 101"
-check_rule "99" "Fwmark 0x1 -> TProxy Table"
-check_rule "100" "Source IP1 -> Table 100"
-check_rule "101" "Source IP2 -> Table 101"
+check_rule "90" "Fwmark 0x100 -> Table $TABLE1"
+check_rule "91" "Fwmark 0x200 -> Table $TABLE2"
+check_rule "99" "Fwmark 0x1 -> TProxy Table $TPROXY_TABLE"
+check_rule "100" "Source IP1 -> Table $TABLE1"
+check_rule "101" "Source IP2 -> Table $TABLE2"
 
 # 3. Check IPTables
 echo ""
@@ -100,8 +114,15 @@ check_iface() {
         log_warn "Interface $iface does not exist. Skipping."
         return
     fi
-
-    local ip_addr=$(ip -4 addr show $iface | grep -oP '(?<=inet\s)\d+(\.\d+){3}' | head -n 1)
+    
+    # Use get_ip from utils if available, else fallback
+    local ip_addr
+    if command -v get_ip >/dev/null; then
+         ip_addr=$(get_ip "$iface")
+    else
+         # Fallback to simple awk
+         ip_addr=$(ip -4 addr show "$iface" | grep inet | awk '{print $2}' | cut -d/ -f1 | head -n 1)
+    fi
 
     if [ -z "$ip_addr" ]; then
         log_warn "Interface $iface has no IP address."
@@ -111,11 +132,11 @@ check_iface() {
     echo "Testing interface: $iface ($ip_addr)..."
 
     # Test basic connectivity
-    if curl --interface $iface --connect-timeout 3 -s -o /dev/null $TEST_URL; then
+    if curl --interface "$iface" --connect-timeout 3 -s -o /dev/null "$TEST_URL"; then
         log_pass "$iface can reach Internet."
 
         # Test External IP (Optional)
-        EXT_IP=$(curl --interface $iface --connect-timeout 5 -s $IP_API)
+        EXT_IP=$(curl --interface "$iface" --connect-timeout 5 -s "$IP_API")
         if [ -n "$EXT_IP" ]; then
             log_info "External IP via $iface: $EXT_IP"
         else
@@ -126,8 +147,9 @@ check_iface() {
     fi
 }
 
-check_iface "eth0"
-check_iface "eth1"
+check_iface "$IF1"
+check_iface "$IF2"
+
 
 echo ""
 echo "=============================================="

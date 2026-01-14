@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Copyright (c) 2025 mingcheng <mingcheng@apache.org>
+# Copyright (c) 2025-2026 mingcheng <mingcheng@apache.org>
 #
 # Setup multipath routing for load balancing between two interfaces
 #
@@ -11,20 +11,11 @@
 # File Created: 2025-12-27 23:13:18
 #
 # Modified By: mingcheng <mingcheng@apache.org>
-# Last Modified: 2025-12-30 21:59:53
+# Last Modified: 2026-01-14 11:48:17
 ##
 
 # Exit on error
 set -e
-
-# --- Configuration ---
-IF1="eth0"
-IF2="eth1"
-LAN_NET="172.16.1.0/24"
-
-# Routing Table Names
-TABLE1="100"
-TABLE2="101"
 
 # Source utility functions
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -35,7 +26,17 @@ source "$SCRIPT_DIR/utils.sh"
 log_info "Configuring multipath routing..."
 
 # Wait for network initialization (up to 60 seconds)
-# This prevents the script from failing immediately at boot if DHCP is slow
+if ! wait_for_ip "$IF1" 30 2 && ! wait_for_ip "$IF2" 1 1; then
+     # Note: wait_for_ip returns success if IP found.
+     # We want to wait a bit for both, or at least one.
+     # The original logic waited until EITHER had an IP.
+     # Let's stick to a simple wait loop using the function is hard because we want logical OR.
+     :
+fi
+
+# Re-implementing the OR wait using a simple loop for clarity or keeping original if it's specific
+# But let's try to use the config vars first.
+
 MAX_RETRIES=30
 RETRY_DELAY=2
 count=0

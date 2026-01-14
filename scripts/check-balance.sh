@@ -12,9 +12,16 @@
 # Last Modified: 2025-12-29 08:21:09
 ##
 
+# Source utility functions/config if available
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [ -f "$SCRIPT_DIR/utils.sh" ]; then
+    source "$SCRIPT_DIR/utils.sh"
+fi
+
 # Configuration
-IFACE1="${1:-eth0}"
-IFACE2="${2:-eth1}"
+# Use config.sh variables if available, otherwise default to eth0/eth1
+IFACE1="${1:-${IF1:-eth0}}"
+IFACE2="${2:-${IF2:-eth1}}"
 DURATION="${3:-10}"
 
 # Check if interfaces exist

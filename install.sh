@@ -47,6 +47,12 @@ if [ ! -d "$PROJECT_DIR" ]; then
     exit 1
 fi
 
+# Ensure scripts are executable
+log_info "Making scripts executable..."
+chmod +x "$PROJECT_DIR"/scripts/*.sh
+chmod +x "$PROJECT_DIR"/install.sh
+chmod +x "$PROJECT_DIR"/verify.sh
+
 log_info "Installing from $PROJECT_DIR..."
 
 # --- Package Installation ---
@@ -70,10 +76,22 @@ fi
 # --- Systemd Configuration ---
 log_info "Installing systemd services..."
 if [ -d "$PROJECT_DIR/systemd" ]; then
-    cp "$PROJECT_DIR"/systemd/*.service /etc/systemd/system/
-    cp "$PROJECT_DIR"/systemd/*.timer /etc/systemd/system/
+    # Create a temporary directory for modified systemd files
+    TEMP_SYSTEMD=$(mktemp -d)
+    cp "$PROJECT_DIR"/systemd/*.service "$TEMP_SYSTEMD"/
+    cp "$PROJECT_DIR"/systemd/*.timer "$TEMP_SYSTEMD"/
+
+    # Update paths in service files to match PROJECT_DIR
+    # We use | as delimiter to avoid issues with / in paths
+    sed -i "s|/root/faure.sh|$PROJECT_DIR|g" "$TEMP_SYSTEMD"/*.service
+
+    log_info "Installing systemd services..."
+    cp "$TEMP_SYSTEMD"/*.service /etc/systemd/system/
+    cp "$TEMP_SYSTEMD"/*.timer /etc/systemd/system/
     chmod 644 /etc/systemd/system/*.service
     chmod 644 /etc/systemd/system/*.timer
+
+    rm -rf "$TEMP_SYSTEMD"
 
     log_info "Reloading systemd daemon..."
     systemctl daemon-reload
