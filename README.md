@@ -1,3 +1,7 @@
+**Notice: This branch is no longer maintained. Please refrain from using it in any production environment.**
+
+----
+
 # faure.sh，透明代理配置以及相关脚本
 
 ## 概述
