@@ -1,46 +1,49 @@
 #!/usr/bin/env bash
-# Copyright (c) 2026 mingcheng <mingcheng@apache.org>
+# Copyright (c) 2025-2026 mingcheng <mingcheng@apache.org>
 #
-# Configuration variables for faure.sh scripts
+# Shared configuration for faure.sh network scripts.
 #
 # This source code is licensed under the MIT License,
 # which is located in the LICENSE file in the source tree's root directory.
 #
 # File: config.sh
 # Author: mingcheng <mingcheng@apache.org>
-# File Created: 2026-01-14 11:42:22
-#
-# Modified By: mingcheng <mingcheng@apache.org>
-# Last Modified: 2026-01-14 11:47:31
-##.
+# File Created: 2026-01-14
+##
 
-# --- Network Interfaces ---
-# Primary interface (usually internal/static)
-IF1="eth0"
-# Secondary interface (usually external/dynamic/USB)
-IF2="eth1"
+# Network Interfaces
+export IF1="eth0"
+export IF2="eth1"
 
-# --- Network Subnets ---
-# The LAN network that should not be load balanced (or handled specially)
-LAN_NET="172.16.1.0/24"
+# Network Definitions
+export LAN_NET="172.16.1.0/24"
+export MAIN_IP="172.16.1.250"
 
-# --- Routing Tables ---
-# Table IDs for policy routing
-TABLE1="100"
-TABLE2="101"
-TPROXY_TABLE="200"
+# Routing Tables
+export TABLE1="100"
+export TABLE2="101"
 
-# --- TProxy Configuration ---
-# Variables used by setup-tproxy.sh
-# (If these are not set here, setup-tproxy.sh uses its own defaults,
-# but setting them here ensures consistency)
-export FAURE_ADDR_RANGE="$LAN_NET"
-export FAURE_INTERFACE="$IF1"
-export FAURE_TPORT="8848"
+# Routing Properties
+export PRIO_MARK1="90"
+export PRIO_MARK2="91"
+export PRIO_TPROXY="99"
+export PRIO_SRC1="100"
+export PRIO_SRC2="101"
 
-# --- Monitoring ---
-# Files used for state tracking
-STATE_FILE="/run/uplink_status"
+# Firewall Marks
+export MARK1="0x100"
+export MARK2="0x200"
+export TPROXY_MARK="0x1"
 
-# Connectivity check targets
-CONNECTIVITY_TARGETS=("223.5.5.5" "119.29.29.29" "1.1.1.1" "8.8.8.8")
+# Weights for Multipath
+export WEIGHT1=1
+export WEIGHT2=1
+
+# TProxy Settings
+export TPROXY_PORT="8848"
+export TPROXY_DNS_PORT="1053"
+export TPROXY_TABLE="200"
+export CHAIN_NAME="MIHOMO_TPROXY"
+
+# State File
+export UPLINK_STATE_FILE="/run/uplink_status"

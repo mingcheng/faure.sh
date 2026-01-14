@@ -18,7 +18,8 @@
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/utils.sh"
 
-# Note: Configuration variables (IF1, IF2, TABLE1, TABLE2, etc.) are loaded from config.sh via utils.sh
+# State file to avoid flapping/unnecessary updates
+STATE_FILE="${UPLINK_STATE_FILE:-/run/uplink_status}"
 
 # --- Auto-Restore Logic ---
 # Check if interfaces are up but missing routing tables (e.g. after reconnect)
@@ -63,11 +64,13 @@ check_restore_needed() {
     return 1 # No restore needed
 }
 
-# Wait for network initialization (up to 60 seconds)
-if ! wait_for_ip "$IF1" 30 2 && ! wait_for_ip "$IF2" 1 1; then
-    # Continue even if wait fails, as we might be in a partial state
-    :
-fi
+# Check for restoring needed
+# We skip the long wait loop here as this script is intended to be run
+# periodically or after network-online.target.
+# We do a quick check just in case.
+
+IP1=$(get_ip $IF1)
+IP2=$(get_ip $IF2)
 
 if check_restore_needed "$IF1" "$TABLE1"; then NEEDS_RESTORE=1; fi
 if check_restore_needed "$IF2" "$TABLE2"; then NEEDS_RESTORE=1; fi

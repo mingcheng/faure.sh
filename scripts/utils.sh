@@ -11,16 +11,13 @@
 # File Created: 2025-12-31 10:33:40
 #
 # Modified By: mingcheng <mingcheng@apache.org>
-# Last Modified: 2025-12-31 10:38:55
+# Last Modified: 2026-01-14 10:00:00
 ##
 
-# Source utility functions
-# SCRIPT_DIR is determined by the caller script mostly, but here we can try to find config
-# if utils.sh is sourced, BASH_SOURCE[0] is utils.sh
-
-# Load configuration if available
-if [ -f "$(dirname "${BASH_SOURCE[0]}")/config.sh" ]; then
-    source "$(dirname "${BASH_SOURCE[0]}")/config.sh"
+# Source configuration
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [ -f "$SCRIPT_DIR/config.sh" ]; then
+    source "$SCRIPT_DIR/config.sh"
 fi
 
 # --- Logging Functions ---

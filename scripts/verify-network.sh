@@ -14,25 +14,29 @@
 # Last Modified: 2026-01-13 23:46:22
 ##
 
-# Source utility functions to get config
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-if [ -f "$SCRIPT_DIR/utils.sh" ]; then
-    source "$SCRIPT_DIR/utils.sh"
-fi
-# Note: utils.sh sources config.sh
-
-# Defaults if config not loaded
-IF1="${IF1:-eth0}"
-IF2="${IF2:-eth1}"
-TABLE1="${TABLE1:-100}"
-TABLE2="${TABLE2:-101}"
-TPROXY_TABLE="${TPROXY_TABLE:-200}"
-
 # Colors
 GREEN='\033[0;32m'
 RED='\033[0;31m'
 YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
+
+# Source configuration
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [ -f "$SCRIPT_DIR/config.sh" ]; then
+    source "$SCRIPT_DIR/config.sh"
+else
+    # Fallback definitions
+    TABLE1="100"
+    TABLE2="101"
+    MARK1="0x100"
+    MARK2="0x200"
+    PRIO_MARK1="90"
+    PRIO_MARK2="91"
+    PRIO_TPROXY="99"
+    PRIO_SRC1="100"
+    PRIO_SRC2="101"
+    CHAIN_NAME="MIHOMO_TPROXY"
+fi
 
 log_pass() { echo -e "${GREEN}[PASS]${NC} $1"; }
 log_fail() { echo -e "${RED}[FAIL]${NC} $1"; }
@@ -70,11 +74,11 @@ check_rule() {
     fi
 }
 
-check_rule "90" "Fwmark 0x100 -> Table $TABLE1"
-check_rule "91" "Fwmark 0x200 -> Table $TABLE2"
-check_rule "99" "Fwmark 0x1 -> TProxy Table $TPROXY_TABLE"
-check_rule "100" "Source IP1 -> Table $TABLE1"
-check_rule "101" "Source IP2 -> Table $TABLE2"
+check_rule "$PRIO_MARK1" "Fwmark $MARK1 -> Table $TABLE1"
+check_rule "$PRIO_MARK2" "Fwmark $MARK2 -> Table $TABLE2"
+check_rule "$PRIO_TPROXY" "Fwmark $TPROXY_MARK -> TProxy Table"
+check_rule "$PRIO_SRC1" "Source IP1 -> Table $TABLE1"
+check_rule "$PRIO_SRC2" "Source IP2 -> Table $TABLE2"
 
 # 3. Check IPTables
 echo ""
@@ -86,10 +90,10 @@ else
     log_fail "Chain MULTIPATH_MARK missing."
 fi
 
-if iptables -t mangle -L MIHOMO_TPROXY -n >/dev/null 2>&1; then
-    log_pass "Chain MIHOMO_TPROXY exists."
+if iptables -t mangle -L $CHAIN_NAME -n >/dev/null 2>&1; then
+    log_pass "Chain $CHAIN_NAME exists."
 else
-    log_warn "Chain MIHOMO_TPROXY missing (TProxy might not be running)."
+    log_warn "Chain $CHAIN_NAME missing (TProxy might not be running)."
 fi
 
 # Check PREROUTING hooks
@@ -115,14 +119,7 @@ check_iface() {
         return
     fi
 
-    # Use get_ip from utils if available, else fallback
-    local ip_addr
-    if command -v get_ip >/dev/null; then
-         ip_addr=$(get_ip "$iface")
-    else
-         # Fallback to simple awk
-         ip_addr=$(ip -4 addr show "$iface" | grep inet | awk '{print $2}' | cut -d/ -f1 | head -n 1)
-    fi
+    local ip_addr=$(ip -4 addr show $iface | grep -oP '(?<=inet\s)\d+(\.\d+){3}' | head -n 1)
 
     if [ -z "$ip_addr" ]; then
         log_warn "Interface $iface has no IP address."
@@ -132,11 +129,11 @@ check_iface() {
     echo "Testing interface: $iface ($ip_addr)..."
 
     # Test basic connectivity
-    if curl --interface "$iface" --connect-timeout 3 -s -o /dev/null "$TEST_URL"; then
+    if curl --interface $iface --connect-timeout 3 -s -o /dev/null $TEST_URL; then
         log_pass "$iface can reach Internet."
 
         # Test External IP (Optional)
-        EXT_IP=$(curl --interface "$iface" --connect-timeout 5 -s "$IP_API")
+        EXT_IP=$(curl --interface $iface --connect-timeout 5 -s $IP_API)
         if [ -n "$EXT_IP" ]; then
             log_info "External IP via $iface: $EXT_IP"
         else
@@ -147,9 +144,8 @@ check_iface() {
     fi
 }
 
-check_iface "$IF1"
-check_iface "$IF2"
-
+check_iface "eth0"
+check_iface "eth1"
 
 echo ""
 echo "=============================================="

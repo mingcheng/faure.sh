@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Copyright (c) 2025-2026 mingcheng <mingcheng@apache.org>
+# Copyright (c) 2025 mingcheng <mingcheng@apache.org>
 #
 # Setup multipath routing for load balancing between two interfaces
 #
@@ -11,7 +11,7 @@
 # File Created: 2025-12-27 23:13:18
 #
 # Modified By: mingcheng <mingcheng@apache.org>
-# Last Modified: 2026-01-14 11:48:17
+# Last Modified: 2025-12-30 21:59:53
 ##
 
 # Exit on error
@@ -26,17 +26,7 @@ source "$SCRIPT_DIR/utils.sh"
 log_info "Configuring multipath routing..."
 
 # Wait for network initialization (up to 60 seconds)
-if ! wait_for_ip "$IF1" 30 2 && ! wait_for_ip "$IF2" 1 1; then
-     # Note: wait_for_ip returns success if IP found.
-     # We want to wait a bit for both, or at least one.
-     # The original logic waited until EITHER had an IP.
-     # Let's stick to a simple wait loop using the function is hard because we want logical OR.
-     :
-fi
-
-# Re-implementing the OR wait using a simple loop for clarity or keeping original if it's specific
-# But let's try to use the config vars first.
-
+# This prevents the script from failing immediately at boot if DHCP is slow
 MAX_RETRIES=30
 RETRY_DELAY=2
 count=0
@@ -170,24 +160,23 @@ fi
 # Cleanup old policy routing rules
 log_info "Cleaning up old policy rules..."
 # Delete all rules with specific priorities to handle IP changes cleanly
-while ip rule del priority 100 2>/dev/null; do :; done
-while ip rule del priority 101 2>/dev/null; do :; done
+while ip rule del priority $PRIO_SRC1 2>/dev/null; do :; done
+while ip rule del priority $PRIO_SRC2 2>/dev/null; do :; done
 
 # Add new policy routing rules
 log_info "Adding new policy rules..."
 if [ "$HAS_IF1" -eq 1 ]; then
-    ip rule add from $IP1 table $TABLE1 priority 100
+    ip rule add from $IP1 table $TABLE1 priority $PRIO_SRC1
 fi
 if [ "$HAS_IF2" -eq 1 ]; then
-    ip rule add from $IP2 table $TABLE2 priority 101
+    ip rule add from $IP2 table $TABLE2 priority $PRIO_SRC2
     # Ensure traffic originating from eth2 subnet uses table 2
-    [ -n "$SUBNET2" ] && ip rule add from $SUBNET2 table $TABLE2 priority 101
+    [ -n "$SUBNET2" ] && ip rule add from $SUBNET2 table $TABLE2 priority $PRIO_SRC2
 fi
 
 # --- Docker/NAT Compatibility (Connection Marking) ---
 log_info "Configuring connection marking..."
-MARK1="0x100"
-MARK2="0x200"
+# MARK variables loaded from config.sh
 
 iptables -t mangle -N MULTIPATH_MARK 2>/dev/null || true
 iptables -t mangle -F MULTIPATH_MARK
@@ -210,8 +199,8 @@ iptables -t mangle -I PREROUTING 1 -j MULTIPATH_MARK
 # Add ip rules for the marks
 ip rule del fwmark $MARK1 table $TABLE1 2>/dev/null || true
 ip rule del fwmark $MARK2 table $TABLE2 2>/dev/null || true
-ip rule add fwmark $MARK1 table $TABLE1 priority 90
-ip rule add fwmark $MARK2 table $TABLE2 priority 91
+ip rule add fwmark $MARK1 table $TABLE1 priority $PRIO_MARK1
+ip rule add fwmark $MARK2 table $TABLE2 priority $PRIO_MARK2
 
 # Update main routing table
 log_info "Updating main routing table..."
@@ -227,8 +216,8 @@ fi
 log_info "Adding default route..."
 if [ "$IF1_UP" -eq 1 ] && [ "$IF2_UP" -eq 1 ]; then
     ip route add default scope global \
-        nexthop via $GW1 dev $IF1 weight 1 \
-        nexthop via $GW2 dev $IF2 weight 1
+        nexthop via $GW1 dev $IF1 weight $WEIGHT1 \
+        nexthop via $GW2 dev $IF2 weight $WEIGHT2
 elif [ "$IF1_UP" -eq 1 ]; then
     ip route add default via $GW1 dev $IF1 src $IP1
 elif [ "$IF2_UP" -eq 1 ]; then
@@ -252,3 +241,17 @@ fi
 
 ip route flush cache
 log_info "Multipath routing configured successfully"
+
+# Update state file for monitor-uplink.sh
+if [ -n "$UPLINK_STATE_FILE" ]; then
+    if [ "$IF1_UP" -eq 1 ] && [ "$IF2_UP" -eq 1 ]; then
+        echo "BOTH" > "$UPLINK_STATE_FILE"
+    elif [ "$IF1_UP" -eq 1 ]; then
+        echo "IF1_ONLY" > "$UPLINK_STATE_FILE"
+    elif [ "$IF2_UP" -eq 1 ]; then
+        echo "IF2_ONLY" > "$UPLINK_STATE_FILE"
+    else
+        echo "NONE" > "$UPLINK_STATE_FILE"
+    fi
+    log_info "Updated uplink state to: $(cat "$UPLINK_STATE_FILE")"
+fi
