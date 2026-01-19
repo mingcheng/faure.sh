@@ -36,13 +36,13 @@
 2.  **Run Installer**
     This sets up dependencies, copies configurations, and enables systemd services.
     ```bash
-    sudo ./install.sh
+    sudo ./misc_scripts/install.sh
     ```
 
 3.  **Verify Status**
     Check routing tables, rules, and service status.
     ```bash
-    sudo ./verify.sh
+    sudo ./misc_scripts/verify.sh
     ```
 
 
@@ -92,11 +92,15 @@ graph TD
 
 ## 📂 Core Components
 
-*   **`scripts/config.sh`**: Centralized configuration file for interface names, subnets, and routing constants.
+*   **`netplan/*.yaml`**: Network interface configurations.
+*   **`systemd/`**: Service and timer unit files for automatic monitoring and routing management.
+*   **`misc_scripts/`**: Installation and verification scripts for easy setup and troubleshooting.
+*   **`scripts/config.sh`**: Centralized configuration file for interface names, subnets, and routing constants(do not run directly).
 *   **`scripts/monitor-uplink.sh`**: The brain of the operation. Monitors WAN health and triggers routing updates.
 *   **`scripts/setup-multipath.sh`**: Configures routing tables (100/101), nexthops, and connection marking.
 *   **`scripts/setup-tproxy.sh`**: Manages TProxy firewall rules and chains.
-*   **`scripts/utils.sh`**: Shared library for logging and network helper functions.
+*   **`scripts/utils.sh`**: Shared library for logging and network helper functions(do not run directly).
+*   **`scripts/verify-network.sh`**: Outputs current routing tables, rules, and interface statuses for debugging.
 
 ## License
 
