@@ -36,6 +36,8 @@ else
     PRIO_SRC1="100"
     PRIO_SRC2="101"
     CHAIN_NAME="MIHOMO_TPROXY"
+    IF1="eth0"
+    IF2="eth1"
 fi
 
 log_pass() { echo -e "${GREEN}[PASS]${NC} $1"; }
@@ -107,6 +109,7 @@ fi
 # 4. Connectivity Test
 echo ""
 echo "--- 4. Connectivity Test ---"
+# Use China Mainland optimized services
 TEST_URL="http://connect.rom.miui.com/generate_204"
 IP_API="http://myip.ipip.net"
 
@@ -119,7 +122,7 @@ check_iface() {
         return
     fi
 
-    local ip_addr=$(ip -4 addr show $iface | grep -oP '(?<=inet\s)\d+(\.\d+){3}' | head -n 1)
+    local ip_addr=$(ip -4 addr show dev $iface | awk '/inet / {print $2}' | cut -d/ -f1 | head -n 1)
 
     if [ -z "$ip_addr" ]; then
         log_warn "Interface $iface has no IP address."
@@ -144,8 +147,8 @@ check_iface() {
     fi
 }
 
-check_iface "eth0"
-check_iface "eth1"
+check_iface "${IF1:-eth0}"
+check_iface "${IF2:-eth1}"
 
 echo ""
 echo "=============================================="
