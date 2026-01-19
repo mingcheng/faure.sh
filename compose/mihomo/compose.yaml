@@ -1,3 +1,17 @@
+#!#
+# Copyright (c) 2026 mingcheng <mingcheng@apache.org>
+#
+# This source code is licensed under the MIT License,
+# which is located in the LICENSE file in the source tree's root directory.
+#
+# File: compose.yaml
+# Author: mingcheng <mingcheng@apache.org>
+# File Created: 2026-01-19 12:48:00
+#
+# Modified By: mingcheng <mingcheng@apache.org>
+# Last Modified: 2026-01-19 14:23:51
+##
+
 services:
   mihomo:
     image: docker.1ms.run/metacubex/mihomo
@@ -5,7 +19,7 @@ services:
     environment:
       TZ: "Asia/Shanghai"
     dns:
-      - 114.114.114.114
+      - 223.5.5.5
     volumes:
       - ./data:/etc/mihomo
     tmpfs:
@@ -43,3 +57,9 @@ services:
       driver: "json-file"
       options:
         max-size: "128m"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost/healthz"]
+      interval: 60s
+      timeout: 5s
+      retries: 3
+      start_period: 30s

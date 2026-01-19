@@ -1,3 +1,17 @@
+#!#
+# Copyright (c) 2026 mingcheng <mingcheng@apache.org>
+#
+# This source code is licensed under the MIT License,
+# which is located in the LICENSE file in the source tree's root directory.
+#
+# File: compose.yaml
+# Author: mingcheng <mingcheng@apache.org>
+# File Created: 2026-01-19 12:48:00
+#
+# Modified By: mingcheng <mingcheng@apache.org>
+# Last Modified: 2026-01-19 14:23:40
+##
+
 services:
   iperf3:
     image: docker.1ms.run/networkstatic/iperf3
