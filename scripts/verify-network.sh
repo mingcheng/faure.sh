@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Copyright (c) 2025-2026 mingcheng <mingcheng@apache.org>
+# Copyright (c) 2026 mingcheng <mingcheng@apache.org>
 #
 # Verify network configuration for multipath routing and TProxy
 #
@@ -11,7 +11,7 @@
 # File Created: 2025-12-27 23:53:23
 #
 # Modified By: mingcheng <mingcheng@apache.org>
-# Last Modified: 2026-01-13 23:46:22
+# Last Modified: 2026-01-19 11:07:40
 ##
 
 # Colors
@@ -107,8 +107,8 @@ fi
 # 4. Connectivity Test
 echo ""
 echo "--- 4. Connectivity Test ---"
-TEST_URL="http://cp.cloudflare.com/generate_204"
-IP_API="http://ifconfig.me/ip"
+TEST_URL="http://connect.rom.miui.com/generate_204"
+IP_API="http://myip.ipip.net"
 
 check_iface() {
     local iface=$1
