@@ -45,6 +45,14 @@ TPROXY_MARK="${TPROXY_MARK:-0x1}"
 CHAIN_NAME="${CHAIN_NAME:-MIHOMO_TPROXY}"
 PRIO_TPROXY="${PRIO_TPROXY:-99}"
 
+# How long to wait for Mihomo/Clash listeners before giving up. Mihomo can
+# take ~60s (occasionally longer) to download/parse rule providers on first
+# start, so the default budget is generous. Override via env / config.
+#   TPROXY_WAIT_TIMEOUT  - total wait budget in seconds (default 300 = 5 min)
+#   TPROXY_WAIT_INTERVAL - poll interval in seconds (default 2)
+TPROXY_WAIT_TIMEOUT="${TPROXY_WAIT_TIMEOUT:-300}"
+TPROXY_WAIT_INTERVAL="${TPROXY_WAIT_INTERVAL:-2}"
+
 # --- Pre-flight checks -----------------------------------------------------
 if [ "$(id -u)" -ne 0 ]; then
     log_error "This script must be run as root."
@@ -61,14 +69,14 @@ done
 # Ensure Mihomo/TProxy listeners exist; otherwise adding redirect rules will
 # blackhole TCP/UDP traffic.
 check_listeners() {
-    local tcp_listen udp_dns_listen
-    local max_retries=60
-    local retry_delay=2
-    local count=0
+    local tcp_listen=0 udp_dns_listen=0
+    local interval="$TPROXY_WAIT_INTERVAL"
+    local deadline=$(( $(date +%s) + TPROXY_WAIT_TIMEOUT ))
+    local now elapsed remaining
 
-    log_info "Waiting for TProxy listeners (TCP:$TPROXY_PORT, UDP:$TPROXY_DNS_PORT)..."
+    log_info "Waiting up to ${TPROXY_WAIT_TIMEOUT}s for TProxy listeners (TCP:$TPROXY_PORT, UDP:$TPROXY_DNS_PORT)..."
 
-    while [ $count -lt $max_retries ]; do
+    while :; do
         tcp_listen=$(ss -lnt "sport = :$TPROXY_PORT" | tail -n +2 | wc -l)
         udp_dns_listen=$(ss -lnu "sport = :$TPROXY_DNS_PORT" | tail -n +2 | wc -l)
 
@@ -77,16 +85,23 @@ check_listeners() {
             return 0
         fi
 
-        if [ $((count % 5)) -eq 0 ]; then
-            log_info "Waiting for listeners... ($((count + 1))/$max_retries)"
+        now=$(date +%s)
+        if [ "$now" -ge "$deadline" ]; then
+            break
         fi
 
-        sleep "$retry_delay"
-        count=$((count + 1))
+        remaining=$(( deadline - now ))
+        elapsed=$(( TPROXY_WAIT_TIMEOUT - remaining ))
+        # Log roughly every 10s instead of every poll to keep journal quiet.
+        if [ $(( elapsed % 10 )) -lt "$interval" ]; then
+            log_info "Still waiting for listeners... (${elapsed}s elapsed, ${remaining}s remaining; TCP=$tcp_listen UDP=$udp_dns_listen)"
+        fi
+
+        sleep "$interval"
     done
 
-    [ "$tcp_listen" -eq 0 ] && log_error "No process listening on TCP/$TPROXY_PORT (expected Mihomo TProxy)."
-    [ "$udp_dns_listen" -eq 0 ] && log_warn "No process listening on UDP/$TPROXY_DNS_PORT (DNS). DNS redirection will fail."
+    [ "$tcp_listen" -eq 0 ] && log_error "No process listening on TCP/$TPROXY_PORT after ${TPROXY_WAIT_TIMEOUT}s (expected Mihomo TProxy)."
+    [ "$udp_dns_listen" -eq 0 ] && log_warn "No process listening on UDP/$TPROXY_DNS_PORT after ${TPROXY_WAIT_TIMEOUT}s (DNS). DNS redirection will fail."
     return 1
 }
 

@@ -6,7 +6,10 @@ Requires=multipath-routing.service
 [Service]
 Type=oneshot
 ExecStart=/root/faure.sh/scripts/setup-tproxy.sh
-TimeoutStartSec=180
+# Must be >= TPROXY_WAIT_TIMEOUT in setup-tproxy.sh (default 300s) plus a
+# small margin, otherwise systemd will SIGTERM the script before Mihomo
+# finishes initializing rule providers on a cold start.
+TimeoutStartSec=360
 RemainAfterExit=yes
 
 [Install]
