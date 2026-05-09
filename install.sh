@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Copyright (c) 2025-2026 mingcheng <mingcheng@apache.org>
+# Copyright (c) 2026 mingcheng <mingcheng@apache.org>
 #
 # Install script for faure.sh
 #
@@ -13,7 +13,7 @@
 # File Created: 2025-12-28 16:31:58
 #
 # Modified By: mingcheng <mingcheng@apache.org>
-# Last Modified: 2026-01-14 00:42:42
+# Last Modified: 2026-05-09 10:37:14
 ##
 
 set -e
@@ -53,9 +53,40 @@ log_info "Installing from $PROJECT_DIR..."
 log_info "Installing required system packages..."
 if command -v apt &> /dev/null; then
     apt update
-    apt install -y netplan.io iptables net-tools iproute2 procps curl wget iputils-ping dnsutils ca-certificates gnupg lsb-release
+    apt install -y netplan.io iptables net-tools iproute2 procps curl wget \
+        iputils-ping dnsutils ca-certificates gnupg lsb-release \
+        vnstat jq util-linux
 else
     log_error "apt package manager is not found. Please install required packages manually."
+fi
+
+# --- External Configuration Bootstrap ---
+# Create /etc/faure/config.sh on first install so users have a single,
+# upgrade-safe place to override defaults from scripts/config.sh.
+log_info "Bootstrapping external configuration directory /etc/faure..."
+mkdir -p /etc/faure
+if [ ! -f /etc/faure/config.sh ]; then
+    cat > /etc/faure/config.sh <<'EOF'
+#!/usr/bin/env bash
+# /etc/faure/config.sh - local overrides for faure.sh
+#
+# This file is sourced AFTER scripts/config.sh, so any value re-exported here
+# replaces the default. It is preserved across `install.sh` re-runs.
+#
+# Uncomment and adjust the variables you want to override:
+#
+# export IF1="eth0"
+# export IF2="eth1"
+# export LAN_NET="192.168.1.0/24"
+# export MAIN_IP="192.168.1.99"
+# export TPROXY_PORT="8848"
+# export WEIGHT1=1
+# export WEIGHT2=1
+EOF
+    chmod 644 /etc/faure/config.sh
+    log_info "Created /etc/faure/config.sh (edit to override defaults)."
+else
+    log_info "/etc/faure/config.sh already exists; preserving user overrides."
 fi
 
 # --- Sysctl Configuration ---
@@ -88,7 +119,7 @@ if [ -d "$PROJECT_DIR/systemd" ]; then
 
     for service in "${SERVICES[@]}"; do
         if [ -f "/etc/systemd/system/$service" ]; then
-            log_info "Enabling and starting $service..."
+            log_info "Enabling $service..."
             systemctl enable "$service"
         else
           log_error "Service file $service not found in /etc/systemd/system/"
@@ -105,3 +136,12 @@ if [ -d "$PROJECT_DIR/scripts" ]; then
 fi
 
 log_info "Installation completed successfully."
+log_info ""
+log_info "Next steps:"
+log_info "  1. Review and edit /etc/faure/config.sh to match your environment."
+log_info "  2. Configure netplan in /etc/netplan/ and run: netplan apply"
+log_info "  3. Start services manually for the first time:"
+log_info "       systemctl start multipath-routing.service"
+log_info "       systemctl start tproxy-routing.service"
+log_info "       systemctl start monitor-uplink.timer"
+log_info "  4. Verify the setup: sudo $PROJECT_DIR/verify.sh"

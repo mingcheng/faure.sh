@@ -123,21 +123,36 @@ fi
 
 # 6. Service Status
 log_info "--- Service Status ---"
-SERVICES=(
-    "monitor-uplink.service"
-    "monitor-uplink.timer"
+
+# Oneshot services are reported active only while running. For these, we check
+# if they are enabled and look at the last invocation result.
+ONESHOT_SERVICES=(
     "multipath-routing.service"
     "tproxy-routing.service"
 )
 
-for service in "${SERVICES[@]}"; do
-    if systemctl is-active --quiet "$service"; then
-        log_pass "Service $service is active"
-    elif systemctl is-enabled --quiet "$service" 2>/dev/null; then
-        log_warn "Service $service is enabled but NOT active"
+for service in "${ONESHOT_SERVICES[@]}"; do
+    if ! systemctl list-unit-files --no-legend "$service" | grep -q "$service"; then
+        log_fail "Unit $service is not installed"
+        continue
+    fi
+    if systemctl is-enabled --quiet "$service" 2>/dev/null; then
+        result=$(systemctl show -p Result --value "$service" 2>/dev/null)
+        if [ "$result" = "success" ]; then
+            log_pass "Oneshot $service ran successfully"
+        else
+            log_warn "Oneshot $service result: ${result:-unknown}"
+        fi
     else
-        log_fail "Service $service is not active or enabled"
+        log_fail "Service $service is not enabled"
     fi
 done
+
+# The uplink monitor is driven by a timer.
+if systemctl is-active --quiet "monitor-uplink.timer"; then
+    log_pass "Timer monitor-uplink.timer is active"
+else
+    log_warn "Timer monitor-uplink.timer is not active"
+fi
 
 log_info "Verification complete."
