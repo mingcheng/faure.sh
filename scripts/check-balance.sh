@@ -12,9 +12,16 @@
 # Last Modified: 2025-12-29 08:21:09
 ##
 
-# Configuration
-IFACE1="${1:-eth0}"
-IFACE2="${2:-eth1}"
+# Source shared configuration for IF1/IF2 defaults.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [ -f "$SCRIPT_DIR/config.sh" ]; then
+    # shellcheck source=config.sh
+    source "$SCRIPT_DIR/config.sh"
+fi
+
+# Configuration (positional args override config.sh defaults)
+IFACE1="${1:-${IF1:-eth0}}"
+IFACE2="${2:-${IF2:-eth1}}"
 DURATION="${3:-10}"
 
 # Check if interfaces exist

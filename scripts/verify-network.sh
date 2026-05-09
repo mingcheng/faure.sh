@@ -14,32 +14,18 @@
 # Last Modified: 2026-01-19 11:07:40
 ##
 
-# Colors
+# Colors for PASS/FAIL/WARN labels
 GREEN='\033[0;32m'
 RED='\033[0;31m'
 YELLOW='\033[1;33m'
-NC='\033[0m' # No Color
+NC='\033[0m'
 
-# Source configuration
+# Source shared configuration & utilities (config.sh is required).
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-if [ -f "$SCRIPT_DIR/config.sh" ]; then
-    source "$SCRIPT_DIR/config.sh"
-else
-    # Fallback definitions
-    TABLE1="100"
-    TABLE2="101"
-    MARK1="0x100"
-    MARK2="0x200"
-    PRIO_MARK1="90"
-    PRIO_MARK2="91"
-    PRIO_TPROXY="99"
-    PRIO_SRC1="100"
-    PRIO_SRC2="101"
-    CHAIN_NAME="MIHOMO_TPROXY"
-    IF1="eth0"
-    IF2="eth1"
-fi
+# shellcheck source=utils.sh
+source "$SCRIPT_DIR/utils.sh"
 
+# Override utils.sh logging with verifier-style PASS/FAIL labels (no timestamp).
 log_pass() { echo -e "${GREEN}[PASS]${NC} $1"; }
 log_fail() { echo -e "${RED}[FAIL]${NC} $1"; }
 log_warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
@@ -147,8 +133,8 @@ check_iface() {
     fi
 }
 
-check_iface "${IF1:-eth0}"
-check_iface "${IF2:-eth1}"
+check_iface "$IF1"
+check_iface "$IF2"
 
 echo ""
 echo "=============================================="
