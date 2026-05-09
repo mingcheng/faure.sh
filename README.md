@@ -20,46 +20,132 @@
 ## 🚀 Quick Start
 
 ### Prerequisites
-*   Debian Based System (Debian/Ubuntu), RHCL not tested
-*   Root privileges, preferably via `sudo`
-*   Internet connectivity for initial setup
-*   Two network interfaces (physical or virtual)
 
-### Installation
+* A fresh Debian-based system (Debian 11+ / Ubuntu 22.04+). RHEL family is not tested.
+* Root privileges (the installer must be run with `sudo` or as `root`).
+* Outbound Internet connectivity for the package install step.
+* **Two** network interfaces, e.g. `eth0` (LAN/WAN1) + `eth1` (USB tether / WAN2).
+* Linux kernel **4.9+** (required for BBR and `TPROXY` features).
 
-1.  **Clone the Repository**
-    ```bash
-    git clone https://github.com/your-repo/faure.sh.git /root/faure.sh
-    cd /root/faure.sh
-    ```
+### Step 1 — Clone the repository
 
-2.  **Run Installer**
-    This sets up dependencies, copies configurations, and enables systemd services.
-    ```bash
-    sudo ./install.sh
-    ```
+By convention the project lives at `/root/faure.sh`. The installer accepts a custom path as its first argument if you prefer another location.
 
-3.  **Verify Status**
-    Check routing tables, rules, and service status.
-    ```bash
-    sudo ./verify.sh
-    ```
+```bash
+sudo git clone https://github.com/mingcheng/faure.sh.git /root/faure.sh
+cd /root/faure.sh
+```
 
+### Step 2 — Run the installer
 
-### Configuration
+The installer is idempotent — re-running it will refresh sysctl/systemd files but **will not** overwrite your local override at `/etc/faure/config.sh`.
 
-*   **Global Configuration**:
-    Edit `scripts/config.sh` to define your network interfaces (`IF1`, `IF2`), LAN subnet (`LAN_NET`), and other routing parameters. This file is the central source of truth for all scripts.
+```bash
+sudo ./install.sh
+```
 
-*   **Network Interfaces**:
-    Edit `netplan/*.yaml` to match your static/DHCP requirements, then run `netplan apply`.
+What it does:
 
-*   **Traffic Limiting (Optional)**:
-    For metered connections (e.g., 4G/5G), add the monitor script to crontab:
-    ```bash
-    # Check every 5 mins, limit eth1 to 100GB
-    */5 * * * * /root/faure.sh/scripts/monitor-traffic-limit.sh eth1 100 80
-    ```
+1. Installs required packages (`iproute2`, `iptables`, `netplan.io`, `vnstat`, `jq`, …).
+2. Copies sysctl tunings from [sysctl.d/](sysctl.d/) into `/etc/sysctl.d/`.
+3. Copies systemd units from [systemd/](systemd/) into `/etc/systemd/system/` and enables them (it does **not** start them, so you can edit configuration first).
+4. Bootstraps `/etc/faure/config.sh` with a commented template (only on first install).
+5. Sets executable bits on the helper scripts under [scripts/](scripts/).
+
+### Step 3 — Configure your environment
+
+`faure.sh` reads its defaults from [scripts/config.sh](scripts/config.sh). To keep the repository upgrade-clean, **do not edit that file directly** — instead override values in one of these locations (first match wins):
+
+| Priority | Path                      | Typical use                          |
+| -------: | ------------------------- | ------------------------------------ |
+|        1 | `$FAURE_CONFIG` (env var) | Per-invocation testing               |
+|        2 | `/etc/faure/config.sh`    | **Recommended** system-wide override |
+|        3 | `/etc/default/faure`      | Debian-style alternative             |
+
+Example `/etc/faure/config.sh`:
+
+```bash
+export IF1="enp1s0"            # primary uplink
+export IF2="enx001122334455"   # secondary uplink (USB tether)
+export LAN_NET="192.168.1.0/24"
+export MAIN_IP="192.168.1.99"
+export TPROXY_PORT="8848"      # must match your Clash/Sing-box listener
+export WEIGHT1=1               # multipath weight for IF1
+export WEIGHT2=2               # IF2 gets twice the share
+```
+
+Any script (setup, monitor, verify) you run will pick the override up automatically.
+
+### Step 4 — Configure netplan (interface IPs)
+
+Adapt the YAML samples in [netplan/](netplan/) to your hardware, copy them into `/etc/netplan/`, then apply:
+
+```bash
+sudo cp netplan/90-static.yaml /etc/netplan/
+sudo chmod 600 /etc/netplan/90-static.yaml
+sudo netplan apply
+```
+
+Verify the interfaces obtained their IPs:
+
+```bash
+ip -br addr show
+```
+
+### Step 5 — (Optional) Bring up your TProxy backend
+
+`setup-tproxy.sh` waits up to ~120s for a listener on `TPROXY_PORT/tcp` and `53/udp`. Make sure your proxy (Clash/Mihomo) is running first. The [compose/](compose/) directory contains ready-to-use Docker Compose stacks, e.g.:
+
+```bash
+cd compose/mihomo
+sudo docker compose up -d
+```
+
+### Step 6 — Start the services
+
+```bash
+sudo systemctl start multipath-routing.service
+sudo systemctl start tproxy-routing.service
+sudo systemctl start monitor-uplink.timer
+```
+
+These are also enabled at boot. The dependency graph is:
+
+```
+network-online.target
+        └── multipath-routing.service   (oneshot)
+                  └── tproxy-routing.service  (oneshot, waits for proxy listener)
+
+monitor-uplink.timer  → monitor-uplink.service (every 5 min)
+```
+
+### Step 7 — Verify the installation
+
+```bash
+sudo ./verify.sh                       # high-level system / service health
+sudo ./scripts/verify-network.sh       # detailed routing & iptables checks
+```
+
+You should see `[PASS]` for the multipath default route, the policy rules at priorities 90/91/99/100/101, and the `MULTIPATH_MARK` / `MIHOMO_TPROXY` chains.
+
+### Step 8 — (Optional) Limit traffic on a metered link
+
+For a 4G/5G uplink, schedule the traffic monitor via cron or a systemd timer. The script blocks `FORWARD` traffic on the interface once the monthly quota is hit and unblocks it on the 1st of the next month.
+
+```bash
+# Check every 5 minutes; warn at 80% of 100 GB on eth1:
+*/5 * * * * /root/faure.sh/scripts/monitor-traffic-limit.sh eth1 100 80
+```
+
+### Uninstall
+
+```bash
+sudo systemctl disable --now multipath-routing.service tproxy-routing.service monitor-uplink.timer
+sudo rm /etc/systemd/system/{multipath-routing,tproxy-routing,monitor-uplink}.{service,timer}
+sudo rm /etc/sysctl.d/{10,20,30,40,50,99}-*.conf       # only files installed by faure.sh
+sudo rm -rf /etc/faure                                  # removes your local overrides
+sudo systemctl daemon-reload
+```
 
 ## Logic Flow
 
@@ -92,11 +178,22 @@ graph TD
 
 ## 📂 Core Components
 
-*   **`scripts/config.sh`**: Centralized configuration file for interface names, subnets, and routing constants.
+*   **`scripts/config.sh`**: Default configuration file. **Do not edit** — override values from `/etc/faure/config.sh` instead.
+*   **`/etc/faure/config.sh`**: User-owned override file, generated on first install and preserved on upgrades.
 *   **`scripts/monitor-uplink.sh`**: The brain of the operation. Monitors WAN health and triggers routing updates.
 *   **`scripts/setup-multipath.sh`**: Configures routing tables (100/101), nexthops, and connection marking.
 *   **`scripts/setup-tproxy.sh`**: Manages TProxy firewall rules and chains.
-*   **`scripts/utils.sh`**: Shared library for logging and network helper functions.
+*   **`scripts/utils.sh`**: Shared library for logging and network helper functions (also responsible for sourcing the override config).
+
+## 🛠 Troubleshooting
+
+| Symptom                                             | First thing to check                                                                                                                                                    |
+| --------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `multipath-routing.service` fails at boot           | `journalctl -u multipath-routing.service` — usually `IF1`/`IF2` did not get an IP within the 60 s wait window. Verify netplan / DHCP.                                   |
+| `tproxy-routing.service` keeps restarting           | The script aborts if no listener is found on `TPROXY_PORT/tcp` and `53/udp`. Start your Clash/Mihomo container first.                                                   |
+| Default route disappears after USB modem reconnects | The `monitor-uplink.timer` should restore it within 5 min. Trigger it immediately with `sudo systemctl start monitor-uplink.service`.                                   |
+| Override file is being ignored                      | Confirm the path is one of `$FAURE_CONFIG`, `/etc/faure/config.sh`, `/etc/default/faure` and that it `export`s the variables. Run `bash -x scripts/config.sh` to trace. |
+| Need to roll back routing changes                   | `sudo systemctl stop tproxy-routing.service multipath-routing.service` and reboot, or flush manually with `ip route flush table 100 && ip route flush table 101`.       |
 
 ## License
 

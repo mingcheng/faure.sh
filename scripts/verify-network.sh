@@ -36,6 +36,7 @@ else
     PRIO_SRC1="100"
     PRIO_SRC2="101"
     CHAIN_NAME="MIHOMO_TPROXY"
+    TPROXY_MARK="0x1"
     IF1="eth0"
     IF2="eth1"
 fi

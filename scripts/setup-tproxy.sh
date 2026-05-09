@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Copyright (c) 2025-2026 mingcheng <mingcheng@apache.org>
+# Copyright (c) 2026 mingcheng <mingcheng@apache.org>
 #
 # Set up TPROXY firewall rules for Clash transparent proxying.
 #
@@ -11,7 +11,7 @@
 # File Created: 2025-03-19 14:32:47
 #
 # Modified By: mingcheng <mingcheng@apache.org>
-# Last Modified: 2026-01-13 23:43:55
+# Last Modified: 2026-05-09 10:31:52
 ##
 
 # Exit on error, undefined variable, or pipe failure
@@ -19,17 +19,24 @@ set -o errexit
 set -o nounset
 set -o pipefail
 
-# Configuration: Modify these variables or set them in your environment
-FAURE_ADDR_RANGE="${FAURE_ADDR_RANGE:-172.16.1.0/24}"
-FAURE_INTERFACE="${FAURE_INTERFACE:-eth0}"
-FAURE_TPORT="${FAURE_TPORT:-8848}"
-TPROXY_TABLE="${TPROXY_TABLE:-200}"  # Use a different routing table to avoid conflicts
-TPROXY_MARK="0x1"
-CHAIN_NAME="MIHOMO_TPROXY" # Standardized chain name
-
-# Source utility functions
+# Source utility functions (which sources config.sh and any external override)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/utils.sh"
+
+# Configuration is loaded from config.sh (and optionally /etc/faure/config.sh).
+# Environment variables still take precedence for ad-hoc overrides:
+#   FAURE_ADDR_RANGE  -> defaults to $LAN_NET
+#   FAURE_INTERFACE   -> defaults to $IF1
+#   FAURE_TPORT       -> defaults to $TPROXY_PORT
+#   TPROXY_TABLE      -> defaults to $TPROXY_TABLE (from config)
+#   TPROXY_MARK       -> defaults to $TPROXY_MARK (from config)
+#   CHAIN_NAME        -> defaults to $CHAIN_NAME (from config)
+FAURE_ADDR_RANGE="${FAURE_ADDR_RANGE:-${LAN_NET:-192.168.1.0/24}}"
+FAURE_INTERFACE="${FAURE_INTERFACE:-${IF1:-eth0}}"
+FAURE_TPORT="${FAURE_TPORT:-${TPROXY_PORT:-8848}}"
+TPROXY_TABLE="${TPROXY_TABLE:-200}"
+TPROXY_MARK="${TPROXY_MARK:-0x1}"
+CHAIN_NAME="${CHAIN_NAME:-MIHOMO_TPROXY}"
 
 # Check for root privileges
 if [ "$(id -u)" -ne 0 ]; then
@@ -120,7 +127,7 @@ setup_tproxy_chain() {
     iptables -t mangle -N "$CHAIN_NAME"
 
     # Exclude local and private networks
-    local private_nets=("0.0.0.0/8" "10.0.0.0/8" "127.0.0.0/8" "169.254.0.0/16" "172.16.0.0/12" "192.168.0.0/16" "224.0.0.0/4" "240.0.0.0/4")
+    local private_nets=("0.0.0.0/8" "10.0.0.0/8" "127.0.0.0/8" "169.254.0.0/16" "192.168.0.0/16" "224.0.0.0/4" "240.0.0.0/4")
     for net in "${private_nets[@]}"; do
         iptables -t mangle -A "$CHAIN_NAME" -d "$net" -j RETURN
     done

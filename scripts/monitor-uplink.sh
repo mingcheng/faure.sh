@@ -43,12 +43,13 @@ check_restore_needed() {
             fi
 
             # Check if the gateway in the table is reachable (valid subnet)
-            # Assumes format: default via <GW> ...
+            # Route can be either:
+            #   "default via <GW> dev <IF> ..."   -> extract GW after 'via'
+            #   "default dev <IF> ..."             -> no gateway, skip check
             local gw_in_table
-            gw_in_table=$(echo "$route_entry" | awk '{print $3}')
+            gw_in_table=$(echo "$route_entry" | sed -n 's/.*default via \([^ ]*\).*/\1/p')
 
-            # If format is "default dev ...", gw_in_table is "dev"
-            if [ "$gw_in_table" != "dev" ] && [ -n "$gw_in_table" ]; then
+            if [ -n "$gw_in_table" ]; then
                  if ! ip route get "$gw_in_table" dev "$iface" >/dev/null 2>&1; then
                      log_warn "Interface $iface is UP, but gateway $gw_in_table in Table $table is unreachable."
                      return 0 # Needs restore
