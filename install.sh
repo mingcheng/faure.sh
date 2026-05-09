@@ -77,6 +77,8 @@ if [ ! -f /etc/faure/config.sh ]; then
 #
 # export IF1="eth0"
 # export IF2="eth1"
+# # One-NIC side-router mode: uncomment to disable the secondary uplink.
+# # export IF2=""
 # export LAN_NET="192.168.1.0/24"
 # export MAIN_IP="192.168.1.99"
 # export TPROXY_PORT="8848"

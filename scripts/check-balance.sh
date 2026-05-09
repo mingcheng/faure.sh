@@ -12,17 +12,28 @@
 # Last Modified: 2025-12-29 08:21:09
 ##
 
-# Source shared configuration for IF1/IF2 defaults.
+# Source shared configuration and helpers for IF1/IF2 defaults.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-if [ -f "$SCRIPT_DIR/config.sh" ]; then
-    # shellcheck source=config.sh
-    source "$SCRIPT_DIR/config.sh"
+if [ -f "$SCRIPT_DIR/utils.sh" ]; then
+    # shellcheck source=utils.sh
+    source "$SCRIPT_DIR/utils.sh"
 fi
 
 # Configuration (positional args override config.sh defaults)
 IFACE1="${1:-${IF1:-eth0}}"
 IFACE2="${2:-${IF2:-eth1}}"
 DURATION="${3:-10}"
+
+if [ $# -lt 2 ] && ! secondary_uplink_enabled; then
+    echo "Single-uplink mode: no secondary interface to compare."
+    echo "Tip: pass two interface names explicitly to compare traffic counters."
+    exit 0
+fi
+
+if [ -z "$IFACE2" ] || [ "$IFACE2" = "$IFACE1" ]; then
+    echo "Error: two distinct interfaces are required for balance comparison."
+    exit 1
+fi
 
 # Check if interfaces exist
 for iface in "$IFACE1" "$IFACE2"; do

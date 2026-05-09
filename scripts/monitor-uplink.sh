@@ -62,23 +62,28 @@ trigger_restart() {
 
 # --- Main ------------------------------------------------------------------
 RESTART_REASON=""
+HAS_SECONDARY_UPLINK=0
+if secondary_uplink_enabled; then
+    HAS_SECONDARY_UPLINK=1
+fi
 
 # 1. Sanity check: detect missing/broken routing tables for either interface.
-if needs_restore "$IF1" "$TABLE1" || needs_restore "$IF2" "$TABLE2"; then
+if needs_restore "$IF1" "$TABLE1" || { [ "$HAS_SECONDARY_UPLINK" -eq 1 ] && needs_restore "$IF2" "$TABLE2"; }; then
     RESTART_REASON="missing/broken routing table"
 fi
 
 # 2. Connectivity-driven state machine.
 GW1=$(get_gateway "$IF1" "$TABLE1")
-GW2=$(get_gateway "$IF2" "$TABLE2")
+GW2=""
+[ "$HAS_SECONDARY_UPLINK" -eq 1 ] && GW2=$(get_gateway "$IF2" "$TABLE2")
 
 STATUS1=0
 STATUS2=0
 check_connectivity "$IF1" "$GW1" && STATUS1=1
-check_connectivity "$IF2" "$GW2" && STATUS2=1
+[ "$HAS_SECONDARY_UPLINK" -eq 1 ] && check_connectivity "$IF2" "$GW2" && STATUS2=1
 
 log_info "Interface $IF1 (GW: ${GW1:-?}): $([ "$STATUS1" -eq 1 ] && echo UP || echo DOWN)"
-log_info "Interface $IF2 (GW: ${GW2:-?}): $([ "$STATUS2" -eq 1 ] && echo UP || echo DOWN)"
+[ "$HAS_SECONDARY_UPLINK" -eq 1 ] && log_info "Interface $IF2 (GW: ${GW2:-?}): $([ "$STATUS2" -eq 1 ] && echo UP || echo DOWN)"
 
 if   [ "$STATUS1" -eq 1 ] && [ "$STATUS2" -eq 1 ]; then NEW_STATE="BOTH"
 elif [ "$STATUS1" -eq 1 ]; then NEW_STATE="IF1_ONLY"

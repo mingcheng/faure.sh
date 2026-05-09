@@ -46,11 +46,20 @@ export LAN_NET="10.0.0.0/24"
 export TPROXY_PORT="7893"
 ```
 
+For a one-NIC side-router, disable the secondary uplink explicitly:
+
+```sh
+export IF1="enp1s0"
+export IF2=""
+export LAN_IF="$IF1"
+export LAN_NET="192.168.1.0/24"
+```
+
 Variables of note:
 
 | Variable | Default | Used by |
 |----------|---------|---------|
-| `IF1`, `IF2` | `eth0`, `eth1` | All multipath / verification scripts |
+| `IF1`, `IF2` | `eth0`, `eth1` | All multipath / verification scripts; set `IF2=""` or `IF2="$IF1"` for one-NIC side-router mode |
 | `LAN_IF` | `$IF1` | `setup-tproxy.sh` (LAN-facing NIC) |
 | `LAN_NET` | `192.168.1.0/24` | TProxy + multipath bypass |
 | `TABLE1`, `TABLE2` | `100`, `101` | Multipath routing tables |

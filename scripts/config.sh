@@ -25,6 +25,8 @@
 #     # /etc/faure/config.sh
 #     export IF1="enp1s0"
 #     export IF2="enx001122334455"
+#     # For a one-NIC side-router, disable the secondary uplink with:
+#     # export IF2=""
 #     export LAN_NET="10.0.0.0/24"
 #     export TPROXY_PORT="7893"
 #

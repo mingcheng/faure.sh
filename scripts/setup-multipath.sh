@@ -25,6 +25,13 @@ source "$SCRIPT_DIR/utils.sh"
 
 log_info "Configuring multipath routing..."
 
+HAS_SECONDARY_UPLINK=0
+if secondary_uplink_enabled; then
+    HAS_SECONDARY_UPLINK=1
+else
+    log_info "Single-uplink mode detected; secondary uplink is disabled."
+fi
+
 # Wait for network initialization (up to 60 seconds)
 # This prevents the script from failing immediately at boot if DHCP is slow
 MAX_RETRIES=30
@@ -32,7 +39,7 @@ RETRY_DELAY=2
 count=0
 
 while [ $count -lt $MAX_RETRIES ]; do
-    if [ -n "$(get_ip $IF1)" ] || [ -n "$(get_ip $IF2)" ]; then
+    if [ -n "$(get_ip "$IF1")" ] || { [ "$HAS_SECONDARY_UPLINK" -eq 1 ] && [ -n "$(get_ip "$IF2")" ]; }; then
         break
     fi
 
@@ -43,8 +50,9 @@ while [ $count -lt $MAX_RETRIES ]; do
     count=$((count+1))
 done
 
-IP1=$(get_ip $IF1)
-IP2=$(get_ip $IF2)
+IP1=$(get_ip "$IF1")
+IP2=""
+[ "$HAS_SECONDARY_UPLINK" -eq 1 ] && IP2=$(get_ip "$IF2")
 
 # Check which interfaces are available
 HAS_IF1=0
@@ -57,7 +65,9 @@ else
     log_warn "No IP for $IF1. Skipping $IF1 configuration."
 fi
 
-if [ -n "$IP2" ]; then
+if [ "$HAS_SECONDARY_UPLINK" -eq 0 ]; then
+    :
+elif [ -n "$IP2" ]; then
     log_info "$IF2 IP: $IP2"
     HAS_IF2=1
 else
@@ -65,7 +75,11 @@ else
 fi
 
 if [ "$HAS_IF1" -eq 0 ] && [ "$HAS_IF2" -eq 0 ]; then
-    log_error "Neither $IF1 nor $IF2 has an IP address. Exiting."
+    if [ "$HAS_SECONDARY_UPLINK" -eq 1 ]; then
+        log_error "Neither $IF1 nor $IF2 has an IP address. Exiting."
+    else
+        log_error "$IF1 has no IP address. Exiting."
+    fi
     exit 1
 fi
 
@@ -73,11 +87,11 @@ fi
 SUBNET1=""
 SUBNET2=""
 if [ "$HAS_IF1" -eq 1 ]; then
-    SUBNET1=$(get_subnet $IF1)
+    SUBNET1=$(get_subnet "$IF1")
     log_info "$IF1 Subnet: $SUBNET1"
 fi
 if [ "$HAS_IF2" -eq 1 ]; then
-    SUBNET2=$(get_subnet $IF2)
+    SUBNET2=$(get_subnet "$IF2")
     log_info "$IF2 Subnet: $SUBNET2"
 fi
 
@@ -85,7 +99,7 @@ fi
 GW1=""
 GW2=""
 if [ "$HAS_IF1" -eq 1 ]; then
-    GW1=$(get_gateway $IF1 $TABLE1)
+    GW1=$(get_gateway "$IF1" "$TABLE1")
     if [ -z "$GW1" ]; then
         log_error "No Gateway for $IF1"
         HAS_IF1=0
@@ -95,7 +109,7 @@ if [ "$HAS_IF1" -eq 1 ]; then
 fi
 
 if [ "$HAS_IF2" -eq 1 ]; then
-    GW2=$(get_gateway $IF2 $TABLE2)
+    GW2=$(get_gateway "$IF2" "$TABLE2")
     if [ -z "$GW2" ]; then
         log_error "No Gateway for $IF2"
         HAS_IF2=0
@@ -181,26 +195,51 @@ log_info "Configuring connection marking..."
 iptables -t mangle -N MULTIPATH_MARK 2>/dev/null || true
 iptables -t mangle -F MULTIPATH_MARK
 iptables -t mangle -A MULTIPATH_MARK -j CONNMARK --restore-mark
-# Exclude LAN traffic from being marked as "WAN incoming" on IF1
+
+# Bypass LAN-sourced traffic FIRST so it never gets stamped with a WAN mark.
+# This is critical when LAN_IF coincides with one of the WAN uplinks (i.e.
+# LAN and WAN share the same physical NIC). Without this, LAN client traffic
+# entering on $LAN_IF would match the per-uplink rule below, get tagged with
+# the WAN mark, and be force-routed via that uplink's table on the return
+# path -- breaking forwarding/failover when the uplink is down or when the
+# main-table multipath would have chosen the other nexthop.
+iptables -t mangle -A MULTIPATH_MARK -i "$LAN_IF" -s "$LAN_NET" -j RETURN
+
+# Mark NEW traffic incoming on each WAN uplink so the reply uses the matching
+# routing table. The LAN bypass above already handled same-NIC LAN traffic,
+# so we no longer need the (asymmetric) `! -s $LAN_NET` filter here.
 if [ "$HAS_IF1" -eq 1 ]; then
-    iptables -t mangle -A MULTIPATH_MARK -i $IF1 ! -s $LAN_NET -m conntrack --ctstate NEW -j MARK --set-mark $MARK1
+    iptables -t mangle -A MULTIPATH_MARK -i "$IF1" -m conntrack --ctstate NEW -j MARK --set-mark $MARK1
 fi
 if [ "$HAS_IF2" -eq 1 ]; then
-    iptables -t mangle -A MULTIPATH_MARK -i $IF2 -m conntrack --ctstate NEW -j MARK --set-mark $MARK2
+    iptables -t mangle -A MULTIPATH_MARK -i "$IF2" -m conntrack --ctstate NEW -j MARK --set-mark $MARK2
 fi
 iptables -t mangle -A MULTIPATH_MARK -m mark ! --mark 0 -j CONNMARK --save-mark
 iptables -t mangle -A MULTIPATH_MARK -m mark --mark $MARK1 -j ACCEPT
-iptables -t mangle -A MULTIPATH_MARK -m mark --mark $MARK2 -j ACCEPT
+if [ "$HAS_IF2" -eq 1 ]; then
+    iptables -t mangle -A MULTIPATH_MARK -m mark --mark $MARK2 -j ACCEPT
+fi
 
 # Insert at position 1
 iptables -t mangle -D PREROUTING -j MULTIPATH_MARK 2>/dev/null || true
 iptables -t mangle -I PREROUTING 1 -j MULTIPATH_MARK
 
+# Locally-originated traffic also needs the saved connmark restored so that
+# the router's own replies to WAN-incoming connections use the same uplink
+# the request came in on. Without this, an inbound flow on (say) IF2 could
+# be answered through IF1 and dropped by upstream RPF -- a failure mode that
+# is especially visible when LAN and WAN share a NIC and the kernel has
+# multiple default-route nexthops to choose from.
+iptables -t mangle -D OUTPUT -j CONNMARK --restore-mark 2>/dev/null || true
+iptables -t mangle -A OUTPUT -j CONNMARK --restore-mark
+
 # Add ip rules for the marks
 ip rule del fwmark $MARK1 table $TABLE1 2>/dev/null || true
 ip rule del fwmark $MARK2 table $TABLE2 2>/dev/null || true
 ip rule add fwmark $MARK1 table $TABLE1 priority $PRIO_MARK1
-ip rule add fwmark $MARK2 table $TABLE2 priority $PRIO_MARK2
+if [ "$HAS_IF2" -eq 1 ]; then
+    ip rule add fwmark $MARK2 table $TABLE2 priority $PRIO_MARK2
+fi
 
 # Update main routing table
 log_info "Updating main routing table..."

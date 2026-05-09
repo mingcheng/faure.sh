@@ -8,7 +8,7 @@
 
 ## ✨ Key Features
 
-*   **Dual-WAN Multipath Routing**: Aggregates bandwidth from two uplinks (e.g., Wired `eth0` + USB Tethering `eth1`) with automatic failover.
+*   **Dual-WAN Multipath Routing**: Aggregates bandwidth from two uplinks (e.g., Wired `eth0` + USB Tethering `eth1`) with automatic failover; can also run as a one-NIC side-router by disabling the secondary uplink.
 *   **Self-Healing Connectivity**:
     *   **Hot-plug Support**: Automatically detects interface addition/removal (e.g., USB modem disconnects).
     *   **Boot Resilience**: Waits for network initialization at startup to prevent race conditions.
@@ -24,7 +24,7 @@
 * A fresh Debian-based system (Debian 11+ / Ubuntu 22.04+). RHEL family is not tested.
 * Root privileges (the installer must be run with `sudo` or as `root`).
 * Outbound Internet connectivity for the package install step.
-* **Two** network interfaces, e.g. `eth0` (LAN/WAN1) + `eth1` (USB tether / WAN2).
+* One or two network interfaces. Dual-WAN uses `eth0` (LAN/WAN1) + `eth1` (USB tether / WAN2); one-NIC side-router deployments can use only `eth0`.
 * Linux kernel **4.9+** (required for BBR and `TPROXY` features).
 
 ### Step 1 — Clone the repository
@@ -72,6 +72,16 @@ export MAIN_IP="192.168.1.99"
 export TPROXY_PORT="8848"      # must match your Clash/Sing-box listener
 export WEIGHT1=1               # multipath weight for IF1
 export WEIGHT2=2               # IF2 gets twice the share
+```
+
+For a one-NIC side-router, keep LAN clients and upstream on the same physical NIC and explicitly disable the secondary uplink:
+
+```bash
+export IF1="enp1s0"
+export IF2=""
+export LAN_IF="$IF1"
+export LAN_NET="192.168.1.0/24"
+export MAIN_IP="192.168.1.99"
 ```
 
 Any script (setup, monitor, verify) you run will pick the override up automatically.
@@ -126,7 +136,7 @@ sudo ./verify.sh                       # high-level system / service health
 sudo ./scripts/verify-network.sh       # detailed routing & iptables checks
 ```
 
-You should see `[PASS]` for the multipath default route, the policy rules at priorities 90/91/99/100/101, and the `MULTIPATH_MARK` / `MIHOMO_TPROXY` chains.
+You should see `[PASS]` for the default route, the active policy rules, and the `MULTIPATH_MARK` / `MIHOMO_TPROXY` chains. In one-NIC mode the verifier skips `IF2`, `MARK2`, `TABLE2`, and priority `101` checks.
 
 ### Step 8 — (Optional) Limit traffic on a metered link
 

@@ -42,6 +42,15 @@ log_error() {
 
 # --- Network Helper Functions ---
 
+# Return success when the secondary uplink is configured as a distinct
+# interface and currently has IPv4. Setting IF2 empty, setting it to IF1, or
+# leaving the default IF2 inactive on a one-NIC host switches scripts into
+# single-uplink mode; monitor-uplink will pick IF2 up on a later run once the
+# NIC appears and receives an address.
+secondary_uplink_enabled() {
+    [ -n "${IF2:-}" ] && [ "${IF2:-}" != "${IF1:-}" ] && [ -n "$(get_ip "$IF2")" ]
+}
+
 # Get IP address of an interface
 # Usage: get_ip <interface>
 get_ip() {

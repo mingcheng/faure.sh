@@ -35,15 +35,23 @@ echo "=============================================="
 echo "Network Configuration Verification"
 echo "=============================================="
 
-# 1. Check Multipath Route
+HAS_SECONDARY_UPLINK=0
+if secondary_uplink_enabled; then
+    HAS_SECONDARY_UPLINK=1
+fi
+
+# 1. Check Default Route
 echo ""
-echo "--- 1. Multipath Default Route ---"
+echo "--- 1. Default Route ---"
 ROUTE_OUTPUT=$(ip route show default)
 if echo "$ROUTE_OUTPUT" | grep -q "nexthop"; then
     log_pass "Multipath default route detected."
     echo "$ROUTE_OUTPUT" | sed 's/^/       /'
+elif [ -n "$ROUTE_OUTPUT" ]; then
+    log_pass "Single/failover default route detected."
+    echo "$ROUTE_OUTPUT" | sed 's/^/       /'
 else
-    log_fail "No multipath default route found."
+    log_fail "No usable default route found."
     log_info "Current default route: $ROUTE_OUTPUT"
 fi
 
@@ -63,10 +71,16 @@ check_rule() {
 }
 
 check_rule "$PRIO_MARK1" "Fwmark $MARK1 -> Table $TABLE1"
-check_rule "$PRIO_MARK2" "Fwmark $MARK2 -> Table $TABLE2"
+if [ "$HAS_SECONDARY_UPLINK" -eq 1 ]; then
+    check_rule "$PRIO_MARK2" "Fwmark $MARK2 -> Table $TABLE2"
+else
+    log_info "Secondary uplink disabled; skipping $MARK2 / table $TABLE2 rule checks."
+fi
 check_rule "$PRIO_TPROXY" "Fwmark $TPROXY_MARK -> TProxy Table"
 check_rule "$PRIO_SRC1" "Source IP1 -> Table $TABLE1"
-check_rule "$PRIO_SRC2" "Source IP2 -> Table $TABLE2"
+if [ "$HAS_SECONDARY_UPLINK" -eq 1 ]; then
+    check_rule "$PRIO_SRC2" "Source IP2 -> Table $TABLE2"
+fi
 
 # 3. Check IPTables
 echo ""
@@ -134,7 +148,11 @@ check_iface() {
 }
 
 check_iface "$IF1"
-check_iface "$IF2"
+if [ "$HAS_SECONDARY_UPLINK" -eq 1 ]; then
+    check_iface "$IF2"
+else
+    log_info "Secondary uplink disabled; skipping IF2 connectivity test."
+fi
 
 echo ""
 echo "=============================================="
