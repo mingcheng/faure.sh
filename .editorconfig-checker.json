@@ -1,0 +1,11 @@
+{
+  "Verbose": true,
+  "Debug": false,
+  "IgnoreDefaults": false,
+  "SpacesAfterTabs": false,
+  "Exclude": [
+    "\\.git/",
+    "compose/*",
+    "assets/.*\\.graffle"
+  ]
+}

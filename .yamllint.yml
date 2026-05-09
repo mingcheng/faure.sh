@@ -1,0 +1,47 @@
+# yamllint configuration for faure.sh
+# Docs: https://yamllint.readthedocs.io/
+
+extends: default
+
+ignore: |
+  .git/
+  compose/adguard/conf/
+  compose/adguard/work/
+  compose/sing-box/var/
+  compose/mihomo/data/
+
+rules:
+  # Allow long lines (compose files often contain URLs / commands)
+  line-length:
+    max: 200
+    level: warning
+    allow-non-breakable-words: true
+    allow-non-breakable-inline-mappings: true
+
+  # Netplan / compose files commonly use both styles
+  truthy:
+    allowed-values: ["true", "false", "yes", "no", "on", "off"]
+    check-keys: false
+
+  # Allow comments without leading space (some files use #!#)
+  comments:
+    require-starting-space: false
+    min-spaces-from-content: 1
+
+  comments-indentation: disable
+
+  # Document start (---) is optional
+  document-start: disable
+
+  indentation:
+    spaces: 2
+    indent-sequences: consistent
+    check-multi-line-strings: false
+
+  braces:
+    max-spaces-inside: 1
+    level: warning
+
+  brackets:
+    max-spaces-inside: 1
+    level: warning

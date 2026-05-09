@@ -1,0 +1,188 @@
+name: Lint
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  shellcheck:
+    name: ShellCheck (bash scripts)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run ShellCheck
+        uses: ludeeus/action-shellcheck@master
+        env:
+          # Allow `source` of relative paths and external files
+          SHELLCHECK_OPTS: -x -e SC1091 -e SC2034
+        with:
+          severity: warning
+          scandir: "./"
+          ignore_paths: "compose netplan sysctl.d systemd assets misc_scripts"
+
+  shfmt:
+    name: shfmt (bash format check)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: stable
+
+      - name: Install shfmt
+        run: go install mvdan.cc/sh/v3/cmd/shfmt@latest
+
+      - name: Check shell script formatting
+        run: |
+          set -e
+          shopt -s globstar nullglob
+          mapfile -t files < <(find . -type f -name "*.sh" -not -path "./.git/*")
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "No shell scripts found."
+            exit 0
+          fi
+          echo "Checking files:"
+          printf ' - %s\n' "${files[@]}"
+          shfmt -d -i 4 -ci -bn "${files[@]}"
+        shell: bash
+
+  fish-syntax:
+    name: Fish syntax check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install fish
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y fish
+
+      - name: Check fish script syntax
+        shell: bash
+        run: |
+          set -e
+          mapfile -t files < <(find . -type f -name "*.fish" -not -path "./.git/*")
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "No fish scripts found."
+            exit 0
+          fi
+          rc=0
+          for f in "${files[@]}"; do
+            echo "Checking $f"
+            if ! fish -n "$f"; then
+              echo "::error file=$f::fish syntax error"
+              rc=1
+            fi
+          done
+          exit $rc
+
+  yamllint:
+    name: yamllint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install yamllint
+        run: |
+          python3 -m pip install --upgrade pip
+          pip install yamllint
+
+      - name: Run yamllint
+        run: yamllint -c .yamllint.yml .
+
+  compose-validate:
+    name: Validate Docker Compose files
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate compose files
+        shell: bash
+        run: |
+          set -e
+          mapfile -t files < <(find compose -type f -name "compose.yaml" -o -name "compose.yml" -o -name "docker-compose.yaml" -o -name "docker-compose.yml")
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "No compose files found."
+            exit 0
+          fi
+          rc=0
+          for f in "${files[@]}"; do
+            echo "::group::Validating $f"
+            if ! docker compose -f "$f" config --quiet; then
+              echo "::error file=$f::invalid compose file"
+              rc=1
+            fi
+            echo "::endgroup::"
+          done
+          exit $rc
+
+  systemd-unit:
+    name: systemd unit file check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install systemd
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y systemd
+
+      - name: Verify unit files with systemd-analyze
+        shell: bash
+        run: |
+          set -e
+          mapfile -t files < <(find systemd -type f \( -name "*.service" -o -name "*.timer" -o -name "*.socket" -o -name "*.mount" \))
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "No systemd unit files found."
+            exit 0
+          fi
+          rc=0
+          for f in "${files[@]}"; do
+            echo "::group::Verifying $f"
+            # systemd-analyze verify expects an absolute path or a unit name in search dirs
+            if ! systemd-analyze verify --recursive-errors=no "$(realpath "$f")" 2>&1; then
+              echo "::warning file=$f::systemd-analyze reported issues (may include missing dependencies on CI)"
+            fi
+            echo "::endgroup::"
+          done
+          exit $rc
+
+  editorconfig:
+    name: EditorConfig check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run editorconfig-checker
+        uses: editorconfig-checker/action-editorconfig-checker@main
+
+  markdownlint:
+    name: Markdown lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run markdownlint
+        uses: DavidAnson/markdownlint-cli2-action@v16
+        with:
+          globs: |
+            **/*.md
+            !**/node_modules/**
+
+  actionlint:
+    name: actionlint (workflows)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run actionlint
+        shell: bash
+        run: |
+          bash <(curl -fsSL https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash)
+          ./actionlint -color
