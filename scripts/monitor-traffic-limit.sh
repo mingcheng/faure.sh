@@ -14,6 +14,11 @@
 
 set -u
 
+# Source utils.sh for log_info / log_warn / log_error (config.sh too).
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=utils.sh
+[ -f "$SCRIPT_DIR/utils.sh" ] && source "$SCRIPT_DIR/utils.sh"
+
 # --- Configuration ---
 IFACE="${1:-}"
 LIMIT_GB="${2:-}"
@@ -102,21 +107,22 @@ get_vnstat_bytes() {
     return 1
 }
 
-# Log messages
-log() {
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1"
-}
+# Logging fallback if utils.sh wasn't available for some reason.
+type log_info >/dev/null 2>&1 || log_info()  { echo "[$(date '+%Y-%m-%d %H:%M:%S')] [INFO] $*"; }
+type log_warn >/dev/null 2>&1 || log_warn()  { echo "[$(date '+%Y-%m-%d %H:%M:%S')] [WARN] $*" >&2; }
+type log_error >/dev/null 2>&1 || log_error() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] [ERROR] $*" >&2; }
 
 # Block interface
+# Docker compatibility: this rule is intentionally inserted at the TOP of the
+# builtin FORWARD chain so it preempts the jump to DOCKER-USER. That is the
+# desired behaviour for hard traffic caps -- once the cap is hit we want to
+# stop ALL forwarded traffic for that uplink, including container egress.
 block_interface() {
-    log "Blocking internet access for $IFACE..."
+    log_info "Blocking internet access for $IFACE..."
 
-    # Block forwarding
+    # Block forwarding (idempotent insert)
     iptables -C FORWARD -i "$IFACE" -j DROP 2>/dev/null || iptables -I FORWARD -i "$IFACE" -j DROP
     iptables -C FORWARD -o "$IFACE" -j DROP 2>/dev/null || iptables -I FORWARD -o "$IFACE" -j DROP
-
-    # Block output (optional, depending on if we want to block the host itself using this interface)
-    # iptables -C OUTPUT -o "$IFACE" -j DROP 2>/dev/null || iptables -I OUTPUT -o "$IFACE" -j DROP
 
     # Execute alert script if provided
     if [ -n "$ALERT_SCRIPT" ] && [ -x "$ALERT_SCRIPT" ]; then
@@ -126,16 +132,15 @@ block_interface() {
 
 # Unblock interface
 unblock_interface() {
-    log "Unblocking internet access for $IFACE..."
+    log_info "Unblocking internet access for $IFACE..."
 
     iptables -D FORWARD -i "$IFACE" -j DROP 2>/dev/null || true
     iptables -D FORWARD -o "$IFACE" -j DROP 2>/dev/null || true
-    # iptables -D OUTPUT -o "$IFACE" -j DROP 2>/dev/null || true
 }
 
 # Send warning
 send_warning() {
-    log "Warning: Traffic usage for $IFACE is at ${1}% ($CURRENT_USAGE_GB GB / $LIMIT_GB GB)"
+    log_warn "Traffic usage for $IFACE is at ${1}% ($CURRENT_USAGE_GB GB / $LIMIT_GB GB)"
     if [ -n "$ALERT_SCRIPT" ] && [ -x "$ALERT_SCRIPT" ]; then
         "$ALERT_SCRIPT" "WARNING" "$IFACE" "$CURRENT_USAGE_GB" "$LIMIT_GB"
     fi
@@ -164,7 +169,7 @@ fi
 
 # Handle Month Reset
 if [ "$CURRENT_MONTH" != "$STORED_MONTH" ]; then
-    log "New month detected. Resetting counters for $IFACE."
+    log_info "New month detected. Resetting counters for $IFACE."
     STORED_MONTH="$CURRENT_MONTH"
     ACCUMULATED_BYTES="0"
     LAST_BYTES="$CURRENT_BYTES" # Reset baseline
@@ -205,7 +210,7 @@ WARNING_BYTES=$(awk "BEGIN {printf \"%.0f\", $LIMIT_BYTES * $WARNING_PERCENT / 1
 # 1. Check Block Limit
 if [ "$ACCUMULATED_BYTES" -ge "$LIMIT_BYTES" ]; then
     if [ "$BLOCKED_STATUS" -eq "0" ]; then
-        log "Limit exceeded ($CURRENT_USAGE_GB GB >= $LIMIT_GB GB). Initiating block."
+        log_warn "Limit exceeded ($CURRENT_USAGE_GB GB >= $LIMIT_GB GB). Initiating block."
         block_interface
         BLOCKED_STATUS="1"
     fi

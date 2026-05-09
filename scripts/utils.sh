@@ -97,9 +97,10 @@ get_gateway() {
          fi
     fi
 
-    # 4. Fallback for eth0 (static) - Specific to this environment
-    if [ -z "$gw" ] && [ "$iface" == "eth0" ]; then
-        gw="172.16.1.1"
+    # 4. Static fallback for the primary WAN interface (configurable via
+    #    IF1_GW_FALLBACK in config.sh; empty disables the fallback).
+    if [ -z "$gw" ] && [ -n "${IF1_GW_FALLBACK:-}" ] && [ "$iface" = "${IF1:-eth0}" ]; then
+        gw="$IF1_GW_FALLBACK"
     fi
 
     echo "$gw"
