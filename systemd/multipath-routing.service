@@ -2,7 +2,7 @@
 Description=Multipath Routing Setup
 After=network-online.target
 Wants=network-online.target
-Before=tproxy-firewall.service
+Before=tproxy-routing.service
 
 [Service]
 Type=oneshot
