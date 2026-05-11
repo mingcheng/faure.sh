@@ -63,7 +63,16 @@ export TPROXY_MARK="0x1"
 # Weights for Multipath
 export WEIGHT1=1
 export WEIGHT2=1
-
+# Multipath egress mode (only meaningful when BOTH uplinks are UP; otherwise
+# the single available uplink is used and these settings are ignored):
+#   "balance"  - ECMP load balancing across both uplinks using WEIGHT1/WEIGHT2
+#                (round-robin by flow, weighted by the values above).
+#   "failover" - Active/standby. Only $PRIMARY_IF carries traffic while it is
+#                UP; the other uplink takes over automatically when the
+#                primary fails (handled by monitor-uplink restarting setup).
+export MULTIPATH_MODE="balance"
+# Which logical interface is primary in "failover" mode: "IF1" or "IF2".
+export PRIMARY_IF="IF1"
 # TProxy Settings
 export TPROXY_PORT="8848"
 # Local DNS port that mihomo/clash listens on. The original setup REDIRECTed

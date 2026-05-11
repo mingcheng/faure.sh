@@ -82,8 +82,17 @@ if [ ! -f /etc/faure/config.sh ]; then
 # export LAN_NET="192.168.1.0/24"
 # export MAIN_IP="192.168.1.99"
 # export TPROXY_PORT="8848"
+#
+# # Multipath weights (used in "balance" mode):
 # export WEIGHT1=1
-# export WEIGHT2=1
+# export WEIGHT2=2
+#
+# # Multi-gateway egress mode (only when BOTH uplinks are UP):
+# #   balance  - ECMP load balancing using WEIGHT1/WEIGHT2 (default)
+# #   failover - active/standby; only $PRIMARY_IF is used while it is UP,
+# #              the other uplink takes over automatically on failure.
+# export MULTIPATH_MODE="balance"
+# export PRIMARY_IF="IF1"   # used only when MULTIPATH_MODE=failover
 EOF
     chmod 644 /etc/faure/config.sh
     log_info "Created /etc/faure/config.sh (edit to override defaults)."
@@ -146,4 +155,6 @@ log_info "  3. Start services manually for the first time:"
 log_info "       systemctl start multipath-routing.service"
 log_info "       systemctl start tproxy-routing.service"
 log_info "       systemctl start monitor-uplink.timer"
-log_info "  4. Verify the setup: sudo $PROJECT_DIR/verify.sh"
+log_info "  4. Verify the setup:"
+log_info "       sudo $PROJECT_DIR/scripts/verify-network.sh"
+log_info "       sudo $PROJECT_DIR/scripts/verify-kernel.sh"

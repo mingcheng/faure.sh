@@ -252,11 +252,30 @@ if [ "$HAS_IF2" -eq 1 ]; then
     ip route replace $GW2 dev $IF2 2>/dev/null || true
 fi
 
-log_info "Adding default route..."
+# Multipath egress mode selection. Only takes effect when BOTH uplinks are
+# UP; in single-uplink scenarios the lone available uplink is always used.
+MODE="${MULTIPATH_MODE:-balance}"
+PRIMARY="${PRIMARY_IF:-IF1}"
+
+log_info "Adding default route (mode: $MODE)..."
 if [ "$IF1_UP" -eq 1 ] && [ "$IF2_UP" -eq 1 ]; then
-    ip route add default scope global \
-        nexthop via $GW1 dev $IF1 weight $WEIGHT1 \
-        nexthop via $GW2 dev $IF2 weight $WEIGHT2
+    case "$MODE" in
+        failover)
+            if [ "$PRIMARY" = "IF2" ]; then
+                log_info "Failover mode: primary=$IF2 (backup=$IF1)"
+                ip route add default via $GW2 dev $IF2 src $IP2
+            else
+                log_info "Failover mode: primary=$IF1 (backup=$IF2)"
+                ip route add default via $GW1 dev $IF1 src $IP1
+            fi
+            ;;
+        balance|*)
+            [ "$MODE" != "balance" ] && log_warn "Unknown MULTIPATH_MODE='$MODE', falling back to balance."
+            ip route add default scope global \
+                nexthop via $GW1 dev $IF1 weight $WEIGHT1 \
+                nexthop via $GW2 dev $IF2 weight $WEIGHT2
+            ;;
+    esac
 elif [ "$IF1_UP" -eq 1 ]; then
     ip route add default via $GW1 dev $IF1 src $IP1
 elif [ "$IF2_UP" -eq 1 ]; then

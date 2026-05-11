@@ -64,6 +64,9 @@ Variables of note:
 | `LAN_NET` | `192.168.1.0/24` | TProxy + multipath bypass |
 | `TABLE1`, `TABLE2` | `100`, `101` | Multipath routing tables |
 | `MARK1`, `MARK2` | `0x100`, `0x200` | Multipath fwmarks |
+| `WEIGHT1`, `WEIGHT2` | `1`, `2` | Per-uplink ECMP weights (only used when `MULTIPATH_MODE=balance` and both uplinks are UP) |
+| `MULTIPATH_MODE` | `balance` | `balance` = weighted ECMP; `failover` = active/standby. Only takes effect when **both** uplinks are UP — single-uplink scenarios always use the lone available uplink. |
+| `PRIMARY_IF` | `IF1` | Which logical interface is primary in `failover` mode (`IF1` or `IF2`) |
 | `TPROXY_PORT` | `8848` | Mihomo TProxy listener |
 | `TPROXY_DNS_PORT` | `53` | Local DNS port for REDIRECT target |
 | `TPROXY_TABLE` | `200` | TProxy routing table |

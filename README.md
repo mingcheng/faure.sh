@@ -8,7 +8,7 @@
 
 ## ✨ Key Features
 
-*   **Dual-WAN Multipath Routing**: Aggregates bandwidth from two uplinks (e.g., Wired `eth0` + USB Tethering `eth1`) with automatic failover; can also run as a one-NIC side-router by disabling the secondary uplink.
+*   **Dual-WAN Multipath Routing**: Aggregates bandwidth from two uplinks (e.g., Wired `eth0` + USB Tethering `eth1`). Egress mode is selectable per deployment — weighted **balance** (ECMP) or **failover** (active/standby with a configurable primary). Can also run as a one-NIC side-router by disabling the secondary uplink.
 *   **Self-Healing Connectivity**:
     *   **Hot-plug Support**: Automatically detects interface addition/removal (e.g., USB modem disconnects).
     *   **Boot Resilience**: Waits for network initialization at startup to prevent race conditions.
@@ -72,6 +72,13 @@ export MAIN_IP="192.168.1.99"
 export TPROXY_PORT="8848"      # must match your Clash/Sing-box listener
 export WEIGHT1=1               # multipath weight for IF1
 export WEIGHT2=2               # IF2 gets twice the share
+
+# Multi-gateway egress mode (only when BOTH uplinks are UP):
+#   balance  - ECMP load balancing using WEIGHT1/WEIGHT2 (default)
+#   failover - active/standby; only $PRIMARY_IF is used while it is UP,
+#              the other uplink takes over automatically on failure.
+export MULTIPATH_MODE="balance"
+export PRIMARY_IF="IF1"        # used only when MULTIPATH_MODE=failover
 ```
 
 For a one-NIC side-router, keep LAN clients and upstream on the same physical NIC and explicitly disable the secondary uplink:
@@ -132,11 +139,11 @@ monitor-uplink.timer  → monitor-uplink.service (every 5 min)
 ### Step 7 — Verify the installation
 
 ```bash
-sudo ./verify.sh                       # high-level system / service health
-sudo ./scripts/verify-network.sh       # detailed routing & iptables checks
+sudo ./scripts/verify-network.sh       # routing tables, policy rules, iptables chains, per-uplink connectivity
+sudo ./scripts/verify-kernel.sh        # cross-checks every key in sysctl.d/ against the live kernel
 ```
 
-You should see `[PASS]` for the default route, the active policy rules, and the `MULTIPATH_MARK` / `MIHOMO_TPROXY` chains. In one-NIC mode the verifier skips `IF2`, `MARK2`, `TABLE2`, and priority `101` checks.
+You should see `[PASS]` for the default route, the active policy rules, and the `MULTIPATH_MARK` / `MIHOMO_TPROXY` chains. In one-NIC mode the verifier skips `IF2`, `MARK2`, `TABLE2`, and priority `101` checks. In `failover` mode the default route is reported as a single nexthop (no `nexthop` keyword) — that is expected.
 
 ### Step 8 — (Optional) Limit traffic on a metered link
 
@@ -163,9 +170,10 @@ The following diagram illustrates how `monitor-uplink.sh` maintains connectivity
 
 ```mermaid
 graph TD
-    Start[Timer Trigger] --> CheckIPs[Check Interface IPs]
-    CheckIPs -- Both IPs Present --> CheckConn["Check Connectivity (Ping)"]
-    CheckIPs -- Missing IP --> Wait[Wait/Retry]
+    Start[Timer Trigger] --> SanityCheck["Sanity check routing tables<br/>(needs_restore IF1 / IF2)"]
+    SanityCheck -- Broken --> MarkRestart[Mark restart reason]
+    SanityCheck -- OK --> CheckConn["Check Connectivity (Ping per uplink)"]
+    MarkRestart --> CheckConn
 
     CheckConn -- Both UP --> StateBoth[State: BOTH]
     CheckConn -- IF1 UP Only --> StateIF1[State: IF1_ONLY]
@@ -177,13 +185,14 @@ graph TD
     StateIF2 --> ReadOld
     StateNone --> ReadOld
 
-    ReadOld -- State Changed? --> Yes{Yes}
-    ReadOld -- No --> End[End]
+    ReadOld -- Changed --> SaveState[Save new state + mark restart reason]
+    ReadOld -- Unchanged --> Decide{Restart reason set?}
+    SaveState --> Decide
 
-    Yes --> UpdateRoute[Restart multipath-routing.service]
+    Decide -- Yes --> UpdateRoute[Restart multipath-routing.service]
+    Decide -- No --> End[End]
     UpdateRoute --> UpdateTProxy[Restart tproxy-routing.service]
-    UpdateTProxy --> SaveState[Save New State]
-    SaveState --> End
+    UpdateTProxy --> End
 ```
 
 ## 📂 Core Components
@@ -194,6 +203,7 @@ graph TD
 *   **`scripts/setup-multipath.sh`**: Configures routing tables (100/101), nexthops, and connection marking.
 *   **`scripts/setup-tproxy.sh`**: Manages TProxy firewall rules and chains.
 *   **`scripts/utils.sh`**: Shared library for logging and network helper functions (also responsible for sourcing the override config).
+*   **`scripts/verify-network.sh`** / **`scripts/verify-kernel.sh`**: Standalone verifiers for routing/iptables state and for `sysctl.d/` parameters, respectively.
 
 ## 🛠 Troubleshooting
 
