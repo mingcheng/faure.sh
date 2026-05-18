@@ -189,3 +189,108 @@ wait_for_ip() {
 
     return 1
 }
+
+# --- Tethering / Hotspot detection bypass ---------------------------------
+#
+# Rewrite the IPv4 TTL (and IPv6 Hop-Limit) of every packet leaving the
+# given WAN interface to a fixed value. This is applied in mangle POSTROUTING
+# *after* the kernel's normal forwarding decrement, so the packet egresses
+# with exactly $TTL_BYPASS_VALUE regardless of how many internal hops it
+# took. Carriers that detect tethering by looking for the "off-by-one" TTL
+# fingerprint (TTL = phone_default - 1) are defeated.
+#
+# Notes:
+#   * iptables `TTL` target needs xt_TTL; ip6tables `HL` target needs xt_HL.
+#     Both are part of the standard `iptables-extensions` package on Debian
+#     and are auto-loaded by the kernel on first use. IPv6 is best-effort:
+#     if the module is missing we warn and continue.
+#   * Idempotent: any pre-existing TTL/HL rule for the interface (regardless
+#     of the previous value) is removed before the new one is appended, so
+#     repeated invocations (e.g. via monitor-uplink) do not stack rules.
+#   * If $TTL_BYPASS_ENABLED is 0/false/empty, this becomes a no-op cleanup
+#     so flipping the toggle off and re-running setup removes the rules.
+
+# Sanity-check the configured TTL value. Returns 0 if usable, 1 otherwise.
+_ttl_bypass_validate_value() {
+    local v="${TTL_BYPASS_VALUE:-}"
+    case "$v" in
+        ''|*[!0-9]*) return 1 ;;
+    esac
+    [ "$v" -ge 1 ] && [ "$v" -le 255 ]
+}
+
+# Remove any TTL/HL rewrite rule we may have installed on the given iface.
+# Loops because legacy installs (or value changes) could have left multiple.
+# Usage: clear_ttl_bypass <iface>
+clear_ttl_bypass() {
+    local iface="$1"
+    [ -z "$iface" ] && return 0
+
+    # IPv4: drop every TTL-set rule we previously appended for this iface.
+    while iptables -t mangle -S POSTROUTING 2>/dev/null \
+            | grep -E -- "-o[[:space:]]+${iface}([[:space:]]|$).*-j[[:space:]]+TTL" \
+            | head -n 1 | grep -q . ; do
+        local rule
+        rule=$(iptables -t mangle -S POSTROUTING \
+                | grep -E -- "-o[[:space:]]+${iface}([[:space:]]|$).*-j[[:space:]]+TTL" \
+                | head -n 1 | sed -E 's/^-A /-D /')
+        # shellcheck disable=SC2086
+        iptables -t mangle $rule 2>/dev/null || break
+    done
+
+    # IPv6: same dance, best-effort.
+    if command -v ip6tables >/dev/null 2>&1; then
+        while ip6tables -t mangle -S POSTROUTING 2>/dev/null \
+                | grep -E -- "-o[[:space:]]+${iface}([[:space:]]|$).*-j[[:space:]]+HL" \
+                | head -n 1 | grep -q . ; do
+            local rule6
+            rule6=$(ip6tables -t mangle -S POSTROUTING \
+                    | grep -E -- "-o[[:space:]]+${iface}([[:space:]]|$).*-j[[:space:]]+HL" \
+                    | head -n 1 | sed -E 's/^-A /-D /')
+            # shellcheck disable=SC2086
+            ip6tables -t mangle $rule6 2>/dev/null || break
+        done
+    fi
+}
+
+# Apply (or, if disabled, just clean up) the TTL/HL rewrite on a WAN iface.
+# Usage: apply_ttl_bypass <iface>
+apply_ttl_bypass() {
+    local iface="$1"
+    [ -z "$iface" ] && return 0
+
+    # Always clear first so toggling the feature off and re-running setup
+    # actually removes the rules.
+    clear_ttl_bypass "$iface"
+
+    case "${TTL_BYPASS_ENABLED:-1}" in
+        1|true|TRUE|yes|on) ;;
+        *)
+            log_info "TTL bypass disabled; skipping $iface."
+            return 0
+            ;;
+    esac
+
+    if ! _ttl_bypass_validate_value; then
+        log_warn "TTL_BYPASS_VALUE='${TTL_BYPASS_VALUE:-}' is not an integer in 1..255; skipping $iface."
+        return 0
+    fi
+
+    local val="$TTL_BYPASS_VALUE"
+
+    # IPv4 -- must succeed (xt_TTL ships with the standard iptables package).
+    if iptables -t mangle -A POSTROUTING -o "$iface" -j TTL --ttl-set "$val" 2>/dev/null; then
+        log_info "TTL bypass: $iface egress TTL pinned to $val (IPv4)."
+    else
+        log_warn "TTL bypass: failed to install IPv4 TTL rule on $iface (xt_TTL module missing?)."
+    fi
+
+    # IPv6 -- optional. Skip silently if ip6tables is not present at all.
+    if command -v ip6tables >/dev/null 2>&1; then
+        if ip6tables -t mangle -A POSTROUTING -o "$iface" -j HL --hl-set "$val" 2>/dev/null; then
+            log_info "TTL bypass: $iface egress Hop-Limit pinned to $val (IPv6)."
+        else
+            log_warn "TTL bypass: failed to install IPv6 HL rule on $iface (xt_HL module missing?)."
+        fi
+    fi
+}

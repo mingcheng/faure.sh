@@ -14,6 +14,7 @@
     *   **Boot Resilience**: Waits for network initialization at startup to prevent race conditions.
     *   **Active Monitoring**: The `monitor-uplink` daemon continuously checks connectivity and restores routing tables if dropped.
 *   **Transparent Proxy (TProxy)**: Seamlessly redirects TCP/UDP traffic to proxy backends (Clash/Sing-box) using `iptables` and policy routing.
+*   **Tethering Detection Bypass**: Normalizes IPv4 TTL **and** IPv6 Hop-Limit on every WAN egress (default: 65) so carriers cannot fingerprint forwarded traffic by its decremented TTL. Enabled by default, fully togglable via `TTL_BYPASS_ENABLED` / `TTL_BYPASS_VALUE`.
 *   **Network Optimization**: Pre-configured with BBR congestion control and high-performance sysctl tunings.
 *   **Traffic Management**: Tools to monitor and limit monthly data usage on metered connections.
 
@@ -79,6 +80,14 @@ export WEIGHT2=2               # IF2 gets twice the share
 #              the other uplink takes over automatically on failure.
 export MULTIPATH_MODE="balance"
 export PRIMARY_IF="IF1"        # used only when MULTIPATH_MODE=failover
+
+# Tethering / hotspot detection bypass. Defaults are already set in
+# scripts/config.sh (enabled, value 65 -- mimics Android tether egress).
+# Override only if you need to disable it or pick a different value:
+#   65 -- mimics a phone forwarding tethered traffic (recommended).
+#   64 -- mimics direct phone egress (no downstream device).
+# export TTL_BYPASS_ENABLED=1
+# export TTL_BYPASS_VALUE=65
 ```
 
 For a one-NIC side-router, keep LAN clients and upstream on the same physical NIC and explicitly disable the secondary uplink:
@@ -212,6 +221,7 @@ graph TD
 | `multipath-routing.service` fails at boot           | `journalctl -u multipath-routing.service` — usually `IF1`/`IF2` did not get an IP within the 60 s wait window. Verify netplan / DHCP.                                   |
 | `tproxy-routing.service` keeps restarting           | The script aborts if no listener is found on `TPROXY_PORT/tcp` and `53/udp`. Start your Clash/Mihomo container first.                                                   |
 | Default route disappears after USB modem reconnects | The `monitor-uplink.timer` should restore it within 5 min. Trigger it immediately with `sudo systemctl start monitor-uplink.service`.                                   |
+| Carrier still throttles tethered traffic            | Verify the egress rule with `sudo iptables -t mangle -S POSTROUTING \| grep TTL` and `sudo ip6tables -t mangle -S POSTROUTING \| grep HL`. Try `TTL_BYPASS_VALUE=64` (some carriers expect the iOS profile). Confirm with `tcpdump -i <wan> -n -v 'ip[8]=<value>'`. |
 | Override file is being ignored                      | Confirm the path is one of `$FAURE_CONFIG`, `/etc/faure/config.sh`, `/etc/default/faure` and that it `export`s the variables. Run `bash -x scripts/config.sh` to trace. |
 | Need to roll back routing changes                   | `sudo systemctl stop tproxy-routing.service multipath-routing.service` and reboot, or flush manually with `ip route flush table 100 && ip route flush table 101`.       |
 

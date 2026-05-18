@@ -15,8 +15,8 @@ directly from the command line or from `systemd` units shipped under
 | File | Purpose |
 |------|---------|
 | [`config.sh`](config.sh) | Single source of truth for **all** tunables (interfaces, networks, route tables, fwmarks, TProxy port, etc.). Sourced by every other script via `utils.sh`. |
-| [`utils.sh`](utils.sh) | Shared logging (`log_info` / `log_warn` / `log_error`) and network helpers (`get_ip`, `get_subnet`, `get_gateway`, `check_connectivity`, `wait_for_ip`). Sources `config.sh` automatically. |
-| [`setup-multipath.sh`](setup-multipath.sh) | Builds the dual-uplink load-balancing routing tables, policy rules, `MULTIPATH_MARK` mangle chain (CONNMARK based) and `MASQUERADE` rules. |
+| [`utils.sh`](utils.sh) | Shared logging (`log_info` / `log_warn` / `log_error`), network helpers (`get_ip`, `get_subnet`, `get_gateway`, `check_connectivity`, `wait_for_ip`) and the per-uplink TTL / Hop-Limit normalizer (`apply_ttl_bypass` / `clear_ttl_bypass`). Sources `config.sh` automatically. |
+| [`setup-multipath.sh`](setup-multipath.sh) | Builds the dual-uplink load-balancing routing tables, policy rules, `MULTIPATH_MARK` mangle chain (CONNMARK based), `MASQUERADE` rules, and per-uplink TTL / Hop-Limit normalization. |
 | [`setup-tproxy.sh`](setup-tproxy.sh) | Installs the Mihomo / Clash transparent-proxy chain (`MIHOMO_TPROXY` in `mangle`) plus a LAN-scoped DNS REDIRECT in `nat`. **Docker-safe** (see below). |
 | [`monitor-uplink.sh`](monitor-uplink.sh) | Periodic health-check that reapplies multipath + TProxy *exactly once* per run when either: (a) a routing table looks broken, or (b) the uplink state machine transitions (`BOTH` / `IF1_ONLY` / `IF2_ONLY` / `NONE`). |
 | [`monitor-traffic-limit.sh`](monitor-traffic-limit.sh) | Per-interface monthly traffic cap. Uses `vnstat` when available, falls back to `/sys/class/net/*/statistics`. Hard-blocks forwarding when the cap is hit. |
@@ -74,6 +74,8 @@ Variables of note:
 | `CHAIN_NAME` | `MIHOMO_TPROXY` | TProxy mangle chain |
 | `IF1_GW_FALLBACK` | `172.16.1.1` | Last-resort gateway when DHCP/route detection fails on `IF1`; set empty to disable |
 | `UPLINK_STATE_FILE` | `/run/uplink_status` | State persistence for `monitor-uplink.sh` |
+| `TTL_BYPASS_ENABLED` | `1` | Master switch for the WAN-egress TTL / IPv6 Hop-Limit rewrite (tethering-detection bypass). Set to `0` to disable. |
+| `TTL_BYPASS_VALUE` | `65` | Egress TTL / Hop-Limit value (1..255). `65` mimics a phone forwarding tethered traffic; `64` mimics direct phone egress. |
 
 ---
 

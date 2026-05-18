@@ -85,6 +85,30 @@ export CHAIN_NAME="MIHOMO_TPROXY"
 # State File
 export UPLINK_STATE_FILE="/run/uplink_status"
 
+# ---------------------------------------------------------------------------
+# Tethering / Hotspot detection bypass (TTL / Hop-Limit normalization)
+# ---------------------------------------------------------------------------
+# Many carriers (and some domestic plans) throttle or meter "tethered" traffic
+# separately by inspecting the IPv4 TTL / IPv6 Hop-Limit of packets leaving
+# the handset: a phone's own traffic egresses at the OS default (Android 64,
+# iOS 64, ...), while tethered downstream devices appear with TTL = default-1
+# because the phone forwarded (and decremented) the packet.
+#
+# When this router sits behind such an uplink (e.g. USB tethering on $IF2),
+# its forwarded packets reach the carrier with TTL = default-2, which is a
+# trivial fingerprint. We neutralize this by rewriting the TTL / Hop-Limit on
+# every WAN egress to a fixed value at mangle POSTROUTING (after the kernel's
+# normal decrement), so packets leave the router as if they originated from a
+# phone.
+#
+#   TTL_BYPASS_ENABLED  - 1 = apply on all active uplinks (default), 0 = off.
+#   TTL_BYPASS_VALUE    - integer 1..255. 65 mimics Android tether egress
+#                         (handset default 64 + 1, since the carrier expects
+#                         TTL to have already been decremented once by the
+#                         phone's forwarding path). 64 mimics direct egress.
+export TTL_BYPASS_ENABLED="${TTL_BYPASS_ENABLED:-1}"
+export TTL_BYPASS_VALUE="${TTL_BYPASS_VALUE:-65}"
+
 # Optional gateway fallback when DHCP/route detection fails on IF1.
 # Leave empty to disable the fallback. Used only by utils.sh::get_gateway().
 export IF1_GW_FALLBACK="${IF1_GW_FALLBACK:-172.16.1.1}"

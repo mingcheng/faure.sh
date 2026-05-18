@@ -106,6 +106,62 @@ else
     log_fail "MULTIPATH_MARK NOT hooked in PREROUTING."
 fi
 
+# 3b. TTL / Hop-Limit Bypass (tethering detection)
+echo ""
+echo "--- 3b. TTL / Hop-Limit Bypass ---"
+ttl_enabled="${TTL_BYPASS_ENABLED:-1}"
+case "$ttl_enabled" in
+    1|true|TRUE|yes|on) ttl_enabled=1 ;;
+    *)                  ttl_enabled=0 ;;
+esac
+
+check_ttl_iface() {
+    local iface="$1"
+    [ -z "$iface" ] && return
+    if ! ip link show "$iface" >/dev/null 2>&1; then
+        return
+    fi
+
+    local v4
+    v4=$(iptables -t mangle -S POSTROUTING 2>/dev/null \
+        | grep -E -- "-o[[:space:]]+${iface}([[:space:]]|$).*-j[[:space:]]+TTL" \
+        | sed -nE 's/.*--ttl-set[[:space:]]+([0-9]+).*/\1/p' | head -n 1)
+
+    if [ "$ttl_enabled" -eq 1 ]; then
+        if [ -n "$v4" ]; then
+            log_pass "IPv4 TTL pinned to $v4 on $iface."
+            if [ -n "${TTL_BYPASS_VALUE:-}" ] && [ "$v4" != "$TTL_BYPASS_VALUE" ]; then
+                log_warn "Live TTL ($v4) differs from configured TTL_BYPASS_VALUE ($TTL_BYPASS_VALUE); re-run setup-multipath.sh."
+            fi
+        else
+            log_fail "No IPv4 TTL rewrite rule on $iface (expected -j TTL --ttl-set $TTL_BYPASS_VALUE)."
+        fi
+
+        if command -v ip6tables >/dev/null 2>&1; then
+            local v6
+            v6=$(ip6tables -t mangle -S POSTROUTING 2>/dev/null \
+                | grep -E -- "-o[[:space:]]+${iface}([[:space:]]|$).*-j[[:space:]]+HL" \
+                | sed -nE 's/.*--hl-set[[:space:]]+([0-9]+).*/\1/p' | head -n 1)
+            if [ -n "$v6" ]; then
+                log_pass "IPv6 Hop-Limit pinned to $v6 on $iface."
+            else
+                log_warn "No IPv6 HL rewrite rule on $iface (xt_HL module missing? IPv6 fingerprint may leak)."
+            fi
+        fi
+    else
+        if [ -n "$v4" ]; then
+            log_warn "TTL_BYPASS_ENABLED=0 but a live TTL rule still exists on $iface (TTL=$v4). Re-run setup-multipath.sh to clear it."
+        else
+            log_info "TTL bypass disabled; no rewrite rule on $iface (as expected)."
+        fi
+    fi
+}
+
+check_ttl_iface "$IF1"
+if [ "$HAS_SECONDARY_UPLINK" -eq 1 ]; then
+    check_ttl_iface "$IF2"
+fi
+
 # 4. Connectivity Test
 echo ""
 echo "--- 4. Connectivity Test ---"

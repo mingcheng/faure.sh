@@ -93,6 +93,14 @@ if [ ! -f /etc/faure/config.sh ]; then
 # #              the other uplink takes over automatically on failure.
 # export MULTIPATH_MODE="balance"
 # export PRIMARY_IF="IF1"   # used only when MULTIPATH_MODE=failover
+#
+# # Tethering / hotspot detection bypass. Rewrites the IPv4 TTL and IPv6
+# # Hop-Limit of every WAN egress packet so carriers cannot fingerprint
+# # forwarded (tethered) traffic by its decremented TTL. Enabled by default.
+# #   TTL_BYPASS_VALUE=65 mimics a phone forwarding tethered traffic.
+# #   TTL_BYPASS_VALUE=64 mimics direct phone egress.
+# export TTL_BYPASS_ENABLED=1
+# export TTL_BYPASS_VALUE=65
 EOF
     chmod 644 /etc/faure/config.sh
     log_info "Created /etc/faure/config.sh (edit to override defaults)."

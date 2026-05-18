@@ -297,6 +297,15 @@ if [ "$HAS_IF2" -eq 1 ]; then
     iptables -t nat -A POSTROUTING -o $IF2 -j MASQUERADE
 fi
 
+# --- Tethering / Hotspot detection bypass ---------------------------------
+# Normalize IPv4 TTL / IPv6 Hop-Limit on every WAN egress so carriers cannot
+# fingerprint forwarded (tethered) traffic by its decremented TTL. Cleared
+# and re-applied on every run so toggling TTL_BYPASS_ENABLED in config is
+# picked up by the next setup/monitor cycle.
+log_info "Applying TTL/Hop-Limit bypass on active uplinks..."
+[ "$HAS_IF1" -eq 1 ] && apply_ttl_bypass "$IF1"
+[ "$HAS_IF2" -eq 1 ] && apply_ttl_bypass "$IF2"
+
 ip route flush cache
 log_info "Multipath routing configured successfully"
 
