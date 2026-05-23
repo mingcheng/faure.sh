@@ -117,6 +117,14 @@ get_gateway() {
 
 # Check connectivity via an interface
 # Usage: check_connectivity <interface> <gateway> [timeout]
+#
+# Strategy:
+#   1. ICMP echo to a small list of well-known IPs, source-bound to $iface.
+#   2. If ICMP fails (common on cellular / 5G uplinks that block ICMP to the
+#      public Internet but allow it to the carrier gateway), fall back to a
+#      bash /dev/tcp probe against 223.5.5.5:443 / 119.29.29.29:443. A
+#      successful TCP handshake -- even an immediate RST -- proves the path
+#      is up; only DROP/black-hole returns failure.
 check_connectivity() {
     local iface=$1
     local gw=$2
@@ -136,6 +144,7 @@ check_connectivity() {
         :
     fi
 
+    # --- Phase 1: ICMP ---
     for target in "${targets[@]}"; do
         # If gateway is provided, add a temporary route to force traffic
         if [ -n "$gw" ]; then
@@ -154,6 +163,35 @@ check_connectivity() {
 
         if [ "$success" -eq 1 ]; then break; fi
     done
+
+    # --- Phase 2: TCP fallback (carriers commonly block ICMP) ---
+    if [ "$success" -eq 0 ]; then
+        local ip_addr
+        ip_addr=$(get_ip "$iface")
+        for target in "${targets[@]}"; do
+            # Pin route via $iface so the TCP probe really egresses there.
+            if [ -n "$gw" ]; then
+                ip route replace "$target" via "$gw" dev "$iface" 2>/dev/null || true
+            fi
+
+            # bash /dev/tcp respects the kernel routing table; with the
+            # temporary route above plus the source IP we ensure the SYN
+            # leaves on $iface. timeout(1) caps the syscall.
+            if [ -n "$ip_addr" ] && \
+               timeout "$timeout" bash -c \
+                 "exec 9<>/dev/tcp/$target/443" 2>/dev/null; then
+                success=1
+                exec 9<&- 2>/dev/null || true
+                exec 9>&- 2>/dev/null || true
+            fi
+
+            if [ -n "$gw" ]; then
+                ip route del "$target" via "$gw" dev "$iface" 2>/dev/null || true
+            fi
+
+            if [ "$success" -eq 1 ]; then break; fi
+        done
+    fi
 
     if [ "$success" -eq 1 ]; then
         return 0

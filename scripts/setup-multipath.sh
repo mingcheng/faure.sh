@@ -243,7 +243,21 @@ fi
 
 # Update main routing table
 log_info "Updating main routing table..."
-while ip route del default 2>/dev/null; do :; done
+# Only remove default routes that egress through $IF1 / $IF2 (or a multipath
+# whose nexthops include them). Any default route via an interface we do NOT
+# manage (e.g. a third / temporary uplink the operator added by hand) is
+# preserved on purpose, so this script never breaks unrelated NICs.
+_managed_ifaces_regex="$IF1"
+[ "$HAS_SECONDARY_UPLINK" -eq 1 ] && [ -n "${IF2:-}" ] && _managed_ifaces_regex="$_managed_ifaces_regex|$IF2"
+while IFS= read -r _def; do
+    [ -z "$_def" ] && continue
+    # Match either "default ... dev <ourif>" or "nexthop ... dev <ourif>".
+    if echo "$_def" | grep -qE "(^|[[:space:]])dev[[:space:]]+(${_managed_ifaces_regex})([[:space:]]|$)"; then
+        # shellcheck disable=SC2086
+        ip route del $_def 2>/dev/null || true
+    fi
+done < <(ip route show default 2>/dev/null)
+unset _managed_ifaces_regex _def
 # Ensure main table has routes to gateways (needed for nexthop)
 if [ "$HAS_IF1" -eq 1 ]; then
     ip route replace $GW1 dev $IF1 2>/dev/null || true
