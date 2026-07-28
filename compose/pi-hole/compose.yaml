@@ -1,0 +1,29 @@
+services:
+  pihole:
+    container_name: pihole
+    image: pihole/pihole:2026.05.0
+    environment:
+      TZ: 'Asia/Shanghai'
+      FTLCONF_webserver_api_password: 'hello1234'
+      FTLCONF_webserver_port: '80'
+      FTLCONF_debug_api: 'false'
+    volumes:
+      - './data:/etc/pihole'
+    privileged: true
+    cap_add:
+      - NET_ADMIN
+      - SYS_TIME
+      - SYS_NICE
+    dns:
+      - 223.5.5.5
+      - 233.6.6.6
+    network_mode: host
+    tmpfs:
+      - /tmp:size=128m,mode=1777
+    devices:
+      - /dev/net/tun
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "512m"
+    restart: unless-stopped
