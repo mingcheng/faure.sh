@@ -1,6 +1,6 @@
 services:
   iperf3:
-    image: docker.1ms.run/networkstatic/iperf3
+    image: networkstatic/iperf3
     container_name: iperf3
     restart: unless-stopped
     ports:
