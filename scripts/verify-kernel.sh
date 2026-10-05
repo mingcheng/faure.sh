@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Copyright (c) 2026 mingcheng <mingcheng@apache.org>
-# 
+#
 # Verify kernel parameters against the configurations defined in sysctl.d/
 #
 # This script parses every *.conf file under the project's sysctl.d/ directory,
@@ -16,7 +16,7 @@
 # File Created: 2026-05-09 16:48:36
 #
 # Modified By: mingcheng <mingcheng@apache.org>
-# Last Modified: 2026-05-09 16:49:48
+# Last Modified: 2026-10-05 10:00:00
 ##
 
 set -u
@@ -54,10 +54,11 @@ FAIL_COUNT=0
 MISSING_COUNT=0
 FAIL_DETAILS=()
 
-# Normalize whitespace: collapse all runs of whitespace into a single space and trim
+# Collapse whitespace runs into single spaces and trim (pure bash, no fork).
 normalize() {
-    # shellcheck disable=SC2001
-    echo "$1" | sed -e 's/[[:space:]]\+/ /g' -e 's/^ //' -e 's/ $//'
+    local -a words
+    read -ra words <<<"$1"
+    echo "${words[*]}"
 }
 
 check_param() {
@@ -111,7 +112,7 @@ for conf in "${CONF_FILES[@]}"; do
         # Skip blanks, comments (# or ;)
         [ -z "$line" ] && continue
         case "$line" in
-            \#*|\;*) continue ;;
+            \#* | \;*) continue ;;
         esac
         # Must contain '='
         case "$line" in
@@ -132,7 +133,7 @@ for conf in "${CONF_FILES[@]}"; do
 
         EXPECTED["$key"]="$value"
         SOURCE["$key"]="$(basename "$conf")"
-    done < "$conf"
+    done <"$conf"
 done
 
 # Display per-file overview before running checks

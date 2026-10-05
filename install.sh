@@ -3,7 +3,9 @@
 #
 # Install script for faure.sh
 #
-# Assumes project is located at /root/faure.sh by default.
+# Usage: sudo ./install.sh [project_dir]
+# project_dir defaults to the directory containing this script; systemd unit
+# paths are rewritten to match it.
 #
 # This source code is licensed under the MIT License,
 # which is located in the LICENSE file in the source tree's root directory.
@@ -13,13 +15,15 @@
 # File Created: 2025-12-28 16:31:58
 #
 # Modified By: mingcheng <mingcheng@apache.org>
-# Last Modified: 2026-05-09 10:37:14
+# Last Modified: 2026-10-05 10:00:00
 ##
 
-set -e
+# Exit immediately if a command exits with a non-zero status, if an undefined variable is used, or if any command in a pipeline fails.
+set -o errexit -o nounset -o pipefail
 
-# Default project path
-PROJECT_DIR="${1:-/root/faure.sh}"
+PROJECT_DIR="${1:-$(dirname "${BASH_SOURCE[0]}")}"
+# Path baked into the shipped systemd units; replaced with PROJECT_DIR.
+UNIT_DEFAULT_DIR="/root/faure.sh"
 
 # Colors for output
 GREEN='\033[0;32m'
@@ -36,28 +40,28 @@ log_error() {
 
 # Check if running as root
 if [[ $EUID -ne 0 ]]; then
-   log_error "This script must be run as root"
-   exit 1
-fi
-
-# Check if project directory exists
-if [ ! -d "$PROJECT_DIR" ]; then
-    log_error "Project directory $PROJECT_DIR not found."
-    log_error "Please clone the project to $PROJECT_DIR or provide the path as an argument."
+    log_error "This script must be run as root"
     exit 1
 fi
+
+if [ ! -d "$PROJECT_DIR" ]; then
+    log_error "Project directory $PROJECT_DIR not found."
+    log_error "Please clone the project first or provide its path as an argument."
+    exit 1
+fi
+PROJECT_DIR="$(cd "$PROJECT_DIR" && pwd)"
 
 log_info "Installing from $PROJECT_DIR..."
 
 # --- Package Installation ---
 log_info "Installing required system packages..."
-if command -v apt &> /dev/null; then
-    apt update
-    apt install -y netplan.io iptables net-tools iproute2 procps curl wget \
+if command -v apt-get &>/dev/null; then
+    apt-get update
+    apt-get install -y netplan.io iptables iproute2 procps curl wget \
         iputils-ping dnsutils ca-certificates gnupg lsb-release \
         vnstat jq util-linux
 else
-    log_error "apt package manager is not found. Please install required packages manually."
+    log_error "apt-get is not found. Please install required packages manually."
 fi
 
 # --- External Configuration Bootstrap ---
@@ -66,7 +70,7 @@ fi
 log_info "Bootstrapping external configuration directory /etc/faure..."
 mkdir -p /etc/faure
 if [ ! -f /etc/faure/config.sh ]; then
-    cat > /etc/faure/config.sh <<'EOF'
+    cat >/etc/faure/config.sh <<'EOF'
 #!/usr/bin/env bash
 # /etc/faure/config.sh - local overrides for faure.sh
 #
@@ -79,9 +83,11 @@ if [ ! -f /etc/faure/config.sh ]; then
 # export IF2="eth1"
 # # One-NIC side-router mode: uncomment to disable the secondary uplink.
 # # export IF2=""
+# export LAN_IF="eth0"      # defaults to $IF1
 # export LAN_NET="192.168.1.0/24"
-# export MAIN_IP="192.168.1.99"
 # export TPROXY_PORT="8848"
+# export TPROXY_DNS_PORT="53"
+# export TPROXY_WAIT_TIMEOUT=300   # keep below TimeoutStartSec (360s)
 #
 # # Multipath weights (used in "balance" mode):
 # export WEIGHT1=1
@@ -111,8 +117,7 @@ fi
 # --- Sysctl Configuration ---
 log_info "Installing sysctl configurations..."
 if [ -d "$PROJECT_DIR/sysctl.d" ]; then
-    cp "$PROJECT_DIR"/sysctl.d/*.conf /etc/sysctl.d/
-    chmod 644 /etc/sysctl.d/*.conf
+    install -m 0644 -t /etc/sysctl.d/ "$PROJECT_DIR"/sysctl.d/*.conf
 else
     log_error "sysctl.d directory not found in $PROJECT_DIR"
 fi
@@ -120,17 +125,20 @@ fi
 # --- Systemd Configuration ---
 log_info "Installing systemd services..."
 if [ -d "$PROJECT_DIR/systemd" ]; then
-    cp "$PROJECT_DIR"/systemd/*.service /etc/systemd/system/
-    cp "$PROJECT_DIR"/systemd/*.timer /etc/systemd/system/
-    chmod 644 /etc/systemd/system/*.service
-    chmod 644 /etc/systemd/system/*.timer
+    # Escape sed replacement metacharacters in the path.
+    path_repl=$(printf '%s' "$PROJECT_DIR" | sed 's/[\\&|]/\\&/g')
+    for unit in "$PROJECT_DIR"/systemd/*.service "$PROJECT_DIR"/systemd/*.timer; do
+        [ -f "$unit" ] || continue
+        dest="/etc/systemd/system/$(basename "$unit")"
+        sed "s|$UNIT_DEFAULT_DIR|$path_repl|g" "$unit" >"$dest"
+        chmod 644 "$dest"
+    done
 
     log_info "Reloading systemd daemon..."
     systemctl daemon-reload
 
-    # Enable and start services
+    # monitor-uplink.service is driven by its timer, so it is not enabled.
     SERVICES=(
-        # "monitor-uplink.service"
         "monitor-uplink.timer"
         "multipath-routing.service"
         "tproxy-routing.service"
@@ -141,7 +149,7 @@ if [ -d "$PROJECT_DIR/systemd" ]; then
             log_info "Enabling $service..."
             systemctl enable "$service"
         else
-          log_error "Service file $service not found in /etc/systemd/system/"
+            log_error "Service file $service not found in /etc/systemd/system/"
         fi
     done
 else

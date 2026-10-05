@@ -30,7 +30,7 @@
 
 ### Step 1 — Clone the repository
 
-By convention the project lives at `/root/faure.sh`. The installer accepts a custom path as its first argument if you prefer another location.
+By convention the project lives at `/root/faure.sh`. Any other location works too: the installer defaults to its own directory (or the path given as its first argument) and rewrites the systemd unit paths accordingly.
 
 ```bash
 sudo git clone https://github.com/mingcheng/faure.sh.git /root/faure.sh
@@ -49,7 +49,7 @@ What it does:
 
 1. Installs required packages (`iproute2`, `iptables`, `netplan.io`, `vnstat`, `jq`, …).
 2. Copies sysctl tunings from [sysctl.d/](sysctl.d/) into `/etc/sysctl.d/`.
-3. Copies systemd units from [systemd/](systemd/) into `/etc/systemd/system/` and enables them (it does **not** start them, so you can edit configuration first).
+3. Copies systemd units from [systemd/](systemd/) into `/etc/systemd/system/` (with `ExecStart` paths pointed at the project directory) and enables them (it does **not** start them, so you can edit configuration first).
 4. Bootstraps `/etc/faure/config.sh` with a commented template (only on first install).
 5. Sets executable bits on the helper scripts under [scripts/](scripts/).
 
@@ -63,13 +63,14 @@ What it does:
 |        2 | `/etc/faure/config.sh`    | **Recommended** system-wide override |
 |        3 | `/etc/default/faure`      | Debian-style alternative             |
 
+The override file wins over environment variables, which win over the defaults.
+
 Example `/etc/faure/config.sh`:
 
 ```bash
 export IF1="enp1s0"            # primary uplink
 export IF2="enx001122334455"   # secondary uplink (USB tether)
 export LAN_NET="192.168.1.0/24"
-export MAIN_IP="192.168.1.99"
 export TPROXY_PORT="8848"      # must match your Clash/Sing-box listener
 export WEIGHT1=1               # multipath weight for IF1
 export WEIGHT2=2               # IF2 gets twice the share
@@ -97,7 +98,6 @@ export IF1="enp1s0"
 export IF2=""
 export LAN_IF="$IF1"
 export LAN_NET="192.168.1.0/24"
-export MAIN_IP="192.168.1.99"
 ```
 
 Any script (setup, monitor, verify) you run will pick the override up automatically.
@@ -120,7 +120,7 @@ ip -br addr show
 
 ### Step 5 — (Optional) Bring up your TProxy backend
 
-`setup-tproxy.sh` waits up to ~120s for a listener on `TPROXY_PORT/tcp` and `53/udp`. Make sure your proxy (Clash/Mihomo) is running first. The [compose/](compose/) directory contains ready-to-use Docker Compose stacks, e.g.:
+`setup-tproxy.sh` waits up to `TPROXY_WAIT_TIMEOUT` (default 300 s) for a listener on `TPROXY_PORT/tcp` and `TPROXY_DNS_PORT/udp` (default 53). Make sure your proxy (Clash/Mihomo) is running first. The [compose/](compose/) directory contains ready-to-use Docker Compose stacks, e.g.:
 
 ```bash
 cd compose/mihomo
@@ -167,8 +167,9 @@ For a 4G/5G uplink, schedule the traffic monitor via cron or a systemd timer. Th
 
 ```bash
 sudo systemctl disable --now multipath-routing.service tproxy-routing.service monitor-uplink.timer
-sudo rm /etc/systemd/system/{multipath-routing,tproxy-routing,monitor-uplink}.{service,timer}
-sudo rm /etc/sysctl.d/{10,20,30,40,50,99}-*.conf       # only files installed by faure.sh
+sudo rm -f /etc/systemd/system/{multipath-routing,tproxy-routing,monitor-uplink}.service /etc/systemd/system/monitor-uplink.timer
+# only the files installed by faure.sh -- do NOT glob, distros ship their own 10-*/99-* files
+sudo rm -f /etc/sysctl.d/{10-custom-kernel-bbr,10-custom-kernel-forward,10-custom-kernel-ipv6,20-network-performance,30-security,40-system-optimization,50-traffic-optimization,99-multipath}.conf
 sudo rm -rf /etc/faure                                  # removes your local overrides
 sudo systemctl daemon-reload
 ```
@@ -200,7 +201,7 @@ graph TD
 
     Decide -- Yes --> UpdateRoute[Restart multipath-routing.service]
     Decide -- No --> End[End]
-    UpdateRoute --> UpdateTProxy[Restart tproxy-routing.service]
+    UpdateRoute --> UpdateTProxy["tproxy-routing.service<br/>(restarted via Requires=, started if failed)"]
     UpdateTProxy --> End
 ```
 
@@ -219,7 +220,7 @@ graph TD
 | Symptom                                             | First thing to check                                                                                                                                                    |
 | --------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `multipath-routing.service` fails at boot           | `journalctl -u multipath-routing.service` — usually `IF1`/`IF2` did not get an IP within the 60 s wait window. Verify netplan / DHCP.                                   |
-| `tproxy-routing.service` keeps restarting           | The script aborts if no listener is found on `TPROXY_PORT/tcp` and `53/udp`. Start your Clash/Mihomo container first.                                                   |
+| `tproxy-routing.service` keeps restarting           | The script aborts if no listener is found on `TPROXY_PORT/tcp` and `TPROXY_DNS_PORT/udp` within `TPROXY_WAIT_TIMEOUT`. Start your Clash/Mihomo container first.                     |
 | Default route disappears after USB modem reconnects | The `monitor-uplink.timer` should restore it within 5 min. Trigger it immediately with `sudo systemctl start monitor-uplink.service`.                                   |
 | Carrier still throttles tethered traffic            | Verify the egress rule with `sudo iptables -t mangle -S POSTROUTING \| grep TTL` and `sudo ip6tables -t mangle -S POSTROUTING \| grep HL`. Try `TTL_BYPASS_VALUE=64` (some carriers expect the iOS profile). Confirm with `tcpdump -i <wan> -n -v 'ip[8]=<value>'`. |
 | Override file is being ignored                      | Confirm the path is one of `$FAURE_CONFIG`, `/etc/faure/config.sh`, `/etc/default/faure` and that it `export`s the variables. Run `bash -x scripts/config.sh` to trace. |

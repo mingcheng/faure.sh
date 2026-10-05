@@ -11,22 +11,20 @@
 # File Created: 2025-12-31 10:33:40
 #
 # Modified By: mingcheng <mingcheng@apache.org>
-# Last Modified: 2026-01-14 10:00:00
+# Last Modified: 2026-10-05 10:00:00
 ##
 
-# Source configuration
+# Source configuration (defaults + optional /etc/faure override).
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-if [ -f "$SCRIPT_DIR/config.sh" ]; then
-    source "$SCRIPT_DIR/config.sh"
-fi
-
+# shellcheck source=config.sh
+source "$SCRIPT_DIR/config.sh"
+ 
 # --- Logging Functions ---
 
-# Colors
 COLOR_GREEN='\033[0;32m'
 COLOR_YELLOW='\033[1;33m'
 COLOR_RED='\033[0;31m'
-COLOR_NC='\033[0m' # No Color
+COLOR_NC='\033[0m'
 
 log_info() {
     echo -e "${COLOR_GREEN}[INFO] $(date '+%Y-%m-%d %H:%M:%S')${COLOR_NC} $*"
@@ -41,6 +39,15 @@ log_error() {
 }
 
 # --- Network Helper Functions ---
+# All getters print an empty string (and exit 0) when nothing is found, so
+# they are safe to call from scripts running with errexit + pipefail.
+
+# Print the first IPv4 address of an interface.
+# Usage: get_ip <interface>
+get_ip() {
+    ip -4 -o addr show dev "$1" 2>/dev/null \
+        | awk '{ split($4, a, "/"); print a[1]; exit }' || true
+}
 
 # Return success when the secondary uplink is configured as a distinct
 # interface and currently has IPv4. Setting IF2 empty, setting it to IF1, or
@@ -51,181 +58,117 @@ secondary_uplink_enabled() {
     [ -n "${IF2:-}" ] && [ "${IF2:-}" != "${IF1:-}" ] && [ -n "$(get_ip "$IF2")" ]
 }
 
-# Get IP address of an interface
-# Usage: get_ip <interface>
-get_ip() {
-    local iface=$1
-    # Use awk for better portability than grep -P
-    ip -4 addr show "$iface" 2>/dev/null | grep inet | awk '{print $2}' | cut -d/ -f1 | head -n 1
-}
-
-# Get Subnet of an interface
+# Print the first on-link (scope link, not linkdown) IPv4 subnet of an iface.
 # Usage: get_subnet <interface>
 get_subnet() {
-    local iface=$1
-    ip route show dev "$iface" scope link 2>/dev/null | grep -v "linkdown" | awk '{print $1}' | head -n 1
+    ip -4 route show dev "$1" scope link 2>/dev/null \
+        | awk '!/linkdown/ { print $1; exit }' || true
 }
 
-# Get Gateway IP for an interface
-# Usage: get_gateway <interface> <table_id>
+# Print the gateway for an interface. Sources, in order of preference:
+#   1. the default route already installed in <table_id> (if still reachable)
+#   2. the main table's "default via" route on <interface> (DHCP / netplan)
+#   3. heuristic: the ".1" host of the on-link subnet (typical /24 tethering)
+#   4. IF1_GW_FALLBACK, only for $IF1 (empty disables)
+# Usage: get_gateway <interface> [table_id]
 get_gateway() {
-    local iface=$1
-    local table=$2
-    local gw=""
+    local iface=$1 table=${2:-} gw="" subnet
 
-    # 1. Try specific table first (most reliable if already configured)
     if [ -n "$table" ]; then
-         local candidate_gw
-         candidate_gw=$(ip route show table "$table" 2>/dev/null | grep default | awk '{print $3}')
-         # Validate if the gateway is reachable via the interface (subnet match)
-         if [ -n "$candidate_gw" ]; then
-             if ip route get "$candidate_gw" dev "$iface" >/dev/null 2>&1; then
-                 gw="$candidate_gw"
-             fi
-         fi
+        gw=$(ip -4 route show table "$table" default 2>/dev/null \
+            | awk '$2 == "via" { print $3; exit }' || true)
+        # Drop a stale gateway that is no longer on-link for $iface.
+        if [ -n "$gw" ] && ! ip route get "$gw" dev "$iface" >/dev/null 2>&1; then
+            gw=""
+        fi
     fi
 
-    # 2. If not found, try main table (handle simple 'default via')
     if [ -z "$gw" ]; then
-         local candidate_gw
-         candidate_gw=$(ip route show dev "$iface" 2>/dev/null | grep "default via" | awk '{print $3}')
-         if [ -n "$candidate_gw" ]; then
-             gw="$candidate_gw"
-         fi
+        gw=$(ip -4 route show default dev "$iface" 2>/dev/null \
+            | awk '$2 == "via" { print $3; exit }' || true)
     fi
 
-    # 3. DHCP fallback (Heuristic)
     if [ -z "$gw" ]; then
-         # Get the subnet from scope link (e.g., 192.168.66.0/24)
-         local subnet=$(get_subnet "$iface")
-         if [ -n "$subnet" ]; then
-             # Assume gateway is the .1 address of the subnet
-             # This works for standard /24 networks commonly used in tethering/routers
-             local prefix=$(echo "$subnet" | cut -d. -f1-3)
-             gw="${prefix}.1"
-         fi
+        subnet=$(get_subnet "$iface")
+        # "192.168.66.0/24" -> "192.168.66.1"
+        if [ -n "$subnet" ]; then
+            gw="${subnet%.*}.1"
+        fi
     fi
 
-    # 4. Static fallback for the primary WAN interface (configurable via
-    #    IF1_GW_FALLBACK in config.sh; empty disables the fallback).
-    if [ -z "$gw" ] && [ -n "${IF1_GW_FALLBACK:-}" ] && [ "$iface" = "${IF1:-eth0}" ]; then
+    if [ -z "$gw" ] && [ -n "${IF1_GW_FALLBACK:-}" ] && [ "$iface" = "${IF1:-}" ]; then
         gw="$IF1_GW_FALLBACK"
     fi
 
     echo "$gw"
 }
 
-# Check connectivity via an interface
+# Probe Internet reachability through a specific uplink.
 # Usage: check_connectivity <interface> <gateway> [timeout]
 #
-# Strategy:
-#   1. ICMP echo to a small list of well-known IPs, source-bound to $iface.
-#   2. If ICMP fails (common on cellular / 5G uplinks that block ICMP to the
-#      public Internet but allow it to the carrier gateway), fall back to a
-#      bash /dev/tcp probe against 223.5.5.5:443 / 119.29.29.29:443. A
-#      successful TCP handshake -- even an immediate RST -- proves the path
-#      is up; only DROP/black-hole returns failure.
+# Each target is temporarily pinned to <gateway> via <interface> in the main
+# table, then probed with ICMP; if ICMP fails (cellular carriers often drop
+# it), a TCP/443 handshake is tried instead. Returns 0 on the first success.
 check_connectivity() {
-    local iface=$1
-    local gw=$2
-    local timeout=${3:-2}
+    local iface=$1 gw=${2:-} timeout=${3:-2}
     local targets=("223.5.5.5" "119.29.29.29")
-    local success=0
+    local target ok
 
-    # Check if interface exists
-    if ! ip link show "$iface" >/dev/null 2>&1; then
-        return 1
-    fi
+    ip link show "$iface" >/dev/null 2>&1 || return 1
 
-    # If no gateway provided, try to find one (optional, but better to be explicit)
-    if [ -z "$gw" ]; then
-        # We can't reliably check connectivity without a gateway for policy routing
-        # But if it's a simple ping on the interface...
-        :
-    fi
-
-    # --- Phase 1: ICMP ---
     for target in "${targets[@]}"; do
-        # If gateway is provided, add a temporary route to force traffic
+        ok=1
         if [ -n "$gw" ]; then
             ip route replace "$target" via "$gw" dev "$iface" 2>/dev/null || true
         fi
 
-        # Use ping with interface binding
         if ping -I "$iface" -c 1 -W "$timeout" "$target" >/dev/null 2>&1; then
-            success=1
+            ok=0
+        # /dev/tcp cannot bind to a device; only trust it when the pinned
+        # route above guarantees the SYN leaves via $iface.
+        elif [ -n "$gw" ] && timeout "$timeout" bash -c "exec 9<>/dev/tcp/$target/443" 2>/dev/null; then
+            ok=0
         fi
 
-        # Clean up temporary route
         if [ -n "$gw" ]; then
             ip route del "$target" via "$gw" dev "$iface" 2>/dev/null || true
         fi
-
-        if [ "$success" -eq 1 ]; then break; fi
+        [ "$ok" -eq 0 ] && return 0
     done
-
-    # --- Phase 2: TCP fallback (carriers commonly block ICMP) ---
-    if [ "$success" -eq 0 ]; then
-        local ip_addr
-        ip_addr=$(get_ip "$iface")
-        for target in "${targets[@]}"; do
-            # Pin route via $iface so the TCP probe really egresses there.
-            if [ -n "$gw" ]; then
-                ip route replace "$target" via "$gw" dev "$iface" 2>/dev/null || true
-            fi
-
-            # bash /dev/tcp respects the kernel routing table; with the
-            # temporary route above plus the source IP we ensure the SYN
-            # leaves on $iface. timeout(1) caps the syscall.
-            if [ -n "$ip_addr" ] && \
-               timeout "$timeout" bash -c \
-                 "exec 9<>/dev/tcp/$target/443" 2>/dev/null; then
-                success=1
-                exec 9<&- 2>/dev/null || true
-                exec 9>&- 2>/dev/null || true
-            fi
-
-            if [ -n "$gw" ]; then
-                ip route del "$target" via "$gw" dev "$iface" 2>/dev/null || true
-            fi
-
-            if [ "$success" -eq 1 ]; then break; fi
-        done
-    fi
-
-    if [ "$success" -eq 1 ]; then
-        return 0
-    else
-        return 1
-    fi
+    return 1
 }
 
-# Wait for network interface to obtain an IP address
-# Usage: wait_for_ip <interface> [max_retries] [retry_delay]
+# Block until ANY of the given interfaces has an IPv4 address.
+# Usage: wait_for_ip <max_retries> <retry_delay> <interface>...
 wait_for_ip() {
-    local iface=$1
-    local max_retries=${2:-30}
-    local retry_delay=${3:-2}
-    local count=0
+    local max_retries=$1 retry_delay=$2 count iface
+    shift 2
 
-    while [ $count -lt $max_retries ]; do
-        local ip_addr
-        ip_addr=$(get_ip "$iface")
-
-        if [ -n "$ip_addr" ]; then
-            return 0
+    for ((count = 0; count < max_retries; count++)); do
+        for iface in "$@"; do
+            if [ -n "$(get_ip "$iface")" ]; then
+                return 0
+            fi
+        done
+        # Log every 5th attempt to keep the journal quiet.
+        if ((count % 5 == 0)); then
+            log_info "Waiting for $* to obtain an IP address... ($((count + 1))/$max_retries)"
         fi
-
-        # Only log periodically to avoid spamming journal
-        if [ $((count % 5)) -eq 0 ]; then
-             log_info "Waiting for interface $iface to obtain IP address... ($((count+1))/$max_retries)"
-        fi
-
         sleep "$retry_delay"
-        count=$((count+1))
     done
-
     return 1
+}
+
+# Map per-uplink health flags (1 = UP) to the state string persisted in
+# $UPLINK_STATE_FILE and compared by monitor-uplink.sh.
+# Usage: uplink_state <if1_up> <if2_up>
+uplink_state() {
+    case "$1$2" in
+        11) echo "BOTH" ;;
+        10) echo "IF1_ONLY" ;;
+        01) echo "IF2_ONLY" ;;
+        *) echo "NONE" ;;
+    esac
 }
 
 # --- Tethering / Hotspot detection bypass ---------------------------------
@@ -248,82 +191,71 @@ wait_for_ip() {
 #   * If $TTL_BYPASS_ENABLED is 0/false/empty, this becomes a no-op cleanup
 #     so flipping the toggle off and re-running setup removes the rules.
 
-# Sanity-check the configured TTL value. Returns 0 if usable, 1 otherwise.
-_ttl_bypass_validate_value() {
-    local v="${TTL_BYPASS_VALUE:-}"
-    case "$v" in
-        ''|*[!0-9]*) return 1 ;;
+# Return success when TTL_BYPASS_ENABLED is set to a truthy value.
+ttl_bypass_enabled() {
+    case "${TTL_BYPASS_ENABLED:-1}" in
+        1 | true | TRUE | yes | on) return 0 ;;
+        *) return 1 ;;
     esac
-    [ "$v" -ge 1 ] && [ "$v" -le 255 ]
 }
 
-# Remove any TTL/HL rewrite rule we may have installed on the given iface.
-# Loops because legacy installs (or value changes) could have left multiple.
+# Print the live mangle/POSTROUTING TTL/HL rewrite rules (iptables -S form)
+# for <iface>. Prints nothing if the tool is missing or no rule matches.
+# Usage: egress_rewrite_rules <iptables|ip6tables> <TTL|HL> <iface>
+egress_rewrite_rules() {
+    local cmd=$1 target=$2 iface=$3
+    command -v "$cmd" >/dev/null 2>&1 || return 0
+    "$cmd" -t mangle -S POSTROUTING 2>/dev/null \
+        | grep -E -- "^-A POSTROUTING .*-o ${iface//./\\.} .*-j ${target}( |$)" || true
+}
+
+# Remove any TTL/HL rewrite rule installed on the given iface (all values,
+# so value changes or legacy duplicates are cleaned up too).
 # Usage: clear_ttl_bypass <iface>
 clear_ttl_bypass() {
-    local iface="$1"
-    [ -z "$iface" ] && return 0
+    local iface=${1:-} cmd target line
+    local -a rule
+    [ -n "$iface" ] || return 0
 
-    # IPv4: drop every TTL-set rule we previously appended for this iface.
-    while iptables -t mangle -S POSTROUTING 2>/dev/null \
-            | grep -E -- "-o[[:space:]]+${iface}([[:space:]]|$).*-j[[:space:]]+TTL" \
-            | head -n 1 | grep -q . ; do
-        local rule
-        rule=$(iptables -t mangle -S POSTROUTING \
-                | grep -E -- "-o[[:space:]]+${iface}([[:space:]]|$).*-j[[:space:]]+TTL" \
-                | head -n 1 | sed -E 's/^-A /-D /')
-        # shellcheck disable=SC2086
-        iptables -t mangle $rule 2>/dev/null || break
+    for cmd in iptables ip6tables; do
+        target=TTL
+        [ "$cmd" = ip6tables ] && target=HL
+        # Snapshot first, then delete, so we never mutate while listing.
+        while IFS= read -r line; do
+            [ -n "$line" ] || continue
+            read -ra rule <<<"$line"
+            rule[0]="-D"
+            "$cmd" -t mangle "${rule[@]}" 2>/dev/null || true
+        done <<<"$(egress_rewrite_rules "$cmd" "$target" "$iface")"
     done
-
-    # IPv6: same dance, best-effort.
-    if command -v ip6tables >/dev/null 2>&1; then
-        while ip6tables -t mangle -S POSTROUTING 2>/dev/null \
-                | grep -E -- "-o[[:space:]]+${iface}([[:space:]]|$).*-j[[:space:]]+HL" \
-                | head -n 1 | grep -q . ; do
-            local rule6
-            rule6=$(ip6tables -t mangle -S POSTROUTING \
-                    | grep -E -- "-o[[:space:]]+${iface}([[:space:]]|$).*-j[[:space:]]+HL" \
-                    | head -n 1 | sed -E 's/^-A /-D /')
-            # shellcheck disable=SC2086
-            ip6tables -t mangle $rule6 2>/dev/null || break
-        done
-    fi
 }
 
 # Apply (or, if disabled, just clean up) the TTL/HL rewrite on a WAN iface.
 # Usage: apply_ttl_bypass <iface>
 apply_ttl_bypass() {
-    local iface="$1"
-    [ -z "$iface" ] && return 0
+    local iface=${1:-} val=${TTL_BYPASS_VALUE:-}
+    [ -n "$iface" ] || return 0
 
-    # Always clear first so toggling the feature off and re-running setup
-    # actually removes the rules.
+    # Always clear first so toggling the feature off removes the rules.
     clear_ttl_bypass "$iface"
 
-    case "${TTL_BYPASS_ENABLED:-1}" in
-        1|true|TRUE|yes|on) ;;
-        *)
-            log_info "TTL bypass disabled; skipping $iface."
-            return 0
-            ;;
-    esac
-
-    if ! _ttl_bypass_validate_value; then
-        log_warn "TTL_BYPASS_VALUE='${TTL_BYPASS_VALUE:-}' is not an integer in 1..255; skipping $iface."
+    if ! ttl_bypass_enabled; then
+        log_info "TTL bypass disabled; skipping $iface."
         return 0
     fi
 
-    local val="$TTL_BYPASS_VALUE"
+    if ! [[ $val =~ ^[0-9]+$ ]] || [ "$val" -lt 1 ] || [ "$val" -gt 255 ]; then
+        log_warn "TTL_BYPASS_VALUE='$val' is not an integer in 1..255; skipping $iface."
+        return 0
+    fi
 
-    # IPv4 -- must succeed (xt_TTL ships with the standard iptables package).
     if iptables -t mangle -A POSTROUTING -o "$iface" -j TTL --ttl-set "$val" 2>/dev/null; then
         log_info "TTL bypass: $iface egress TTL pinned to $val (IPv4)."
     else
         log_warn "TTL bypass: failed to install IPv4 TTL rule on $iface (xt_TTL module missing?)."
     fi
 
-    # IPv6 -- optional. Skip silently if ip6tables is not present at all.
+    # IPv6 is best-effort: skip silently when ip6tables is not installed.
     if command -v ip6tables >/dev/null 2>&1; then
         if ip6tables -t mangle -A POSTROUTING -o "$iface" -j HL --hl-set "$val" 2>/dev/null; then
             log_info "TTL bypass: $iface egress Hop-Limit pinned to $val (IPv6)."

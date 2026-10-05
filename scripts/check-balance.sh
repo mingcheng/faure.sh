@@ -9,38 +9,43 @@
 # File Created: 2025-12-27 22:40:47
 #
 # Modified By: mingcheng <mingcheng@apache.org>
-# Last Modified: 2025-12-29 08:21:09
+# Last Modified: 2026-10-05 10:00:00
 ##
+#
+# Sample TX/RX counters on two interfaces for N seconds and print how the
+# traffic was split between them.
+# Usage: ./check-balance.sh [iface1] [iface2] [seconds]
 
-# Source shared configuration and helpers for IF1/IF2 defaults.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-if [ -f "$SCRIPT_DIR/utils.sh" ]; then
-    # shellcheck source=utils.sh
-    source "$SCRIPT_DIR/utils.sh"
-fi
+# shellcheck source=utils.sh
+source "$SCRIPT_DIR/utils.sh"
 
-# Configuration (positional args override config.sh defaults)
-IFACE1="${1:-${IF1:-eth0}}"
-IFACE2="${2:-${IF2:-eth1}}"
+# Positional args override config.sh defaults.
+IFACE1="${1:-$IF1}"
+IFACE2="${2:-${IF2:-}}"
 DURATION="${3:-10}"
 
 if [ $# -lt 2 ] && ! secondary_uplink_enabled; then
-    echo "Single-uplink mode: no secondary interface to compare."
-    echo "Tip: pass two interface names explicitly to compare traffic counters."
-    exit 0
+	echo "Single-uplink mode: no secondary interface to compare."
+	echo "Tip: pass two interface names explicitly to compare traffic counters."
+	exit 0
 fi
 
 if [ -z "$IFACE2" ] || [ "$IFACE2" = "$IFACE1" ]; then
-    echo "Error: two distinct interfaces are required for balance comparison."
-    exit 1
+	echo "Error: two distinct interfaces are required for balance comparison."
+	exit 1
 fi
 
-# Check if interfaces exist
+if ! [[ $DURATION =~ ^[1-9][0-9]*$ ]]; then
+	echo "Error: duration must be a positive integer (seconds)."
+	exit 1
+fi
+
 for iface in "$IFACE1" "$IFACE2"; do
-    if [ ! -d "/sys/class/net/$iface" ]; then
-        echo "Error: Interface $iface not found."
-        exit 1
-    fi
+	if [ ! -d "/sys/class/net/$iface" ]; then
+		echo "Error: Interface $iface not found."
+		exit 1
+	fi
 done
 
 echo "========================================"
@@ -50,73 +55,52 @@ echo "Monitoring $IFACE1 and $IFACE2 for $DURATION seconds..."
 echo "Please generate some traffic (browse websites, download files, etc.)"
 echo ""
 
-# Function to get bytes
-get_tx_bytes() { cat "/sys/class/net/$1/statistics/tx_bytes"; }
-get_rx_bytes() { cat "/sys/class/net/$1/statistics/rx_bytes"; }
+# Usage: get_counter <iface> <tx_bytes|rx_bytes>
+get_counter() { cat "/sys/class/net/$1/statistics/$2"; }
 
-# Get initial statistics
-I1_TX_START=$(get_tx_bytes "$IFACE1")
-I2_TX_START=$(get_tx_bytes "$IFACE2")
-I1_RX_START=$(get_rx_bytes "$IFACE1")
-I2_RX_START=$(get_rx_bytes "$IFACE2")
+I1_TX_START=$(get_counter "$IFACE1" tx_bytes)
+I2_TX_START=$(get_counter "$IFACE2" tx_bytes)
+I1_RX_START=$(get_counter "$IFACE1" rx_bytes)
+I2_RX_START=$(get_counter "$IFACE2" rx_bytes)
 
 sleep "$DURATION"
 
-# Get final statistics
-I1_TX_END=$(get_tx_bytes "$IFACE1")
-I2_TX_END=$(get_tx_bytes "$IFACE2")
-I1_RX_END=$(get_rx_bytes "$IFACE1")
-I2_RX_END=$(get_rx_bytes "$IFACE2")
+I1_TX_DIFF=$(($(get_counter "$IFACE1" tx_bytes) - I1_TX_START))
+I2_TX_DIFF=$(($(get_counter "$IFACE2" tx_bytes) - I2_TX_START))
+I1_RX_DIFF=$(($(get_counter "$IFACE1" rx_bytes) - I1_RX_START))
+I2_RX_DIFF=$(($(get_counter "$IFACE2" rx_bytes) - I2_RX_START))
 
-# Calculate differences
-I1_TX_DIFF=$((I1_TX_END - I1_TX_START))
-I2_TX_DIFF=$((I2_TX_END - I2_TX_START))
-I1_RX_DIFF=$((I1_RX_END - I1_RX_START))
-I2_RX_DIFF=$((I2_RX_END - I2_RX_START))
-
-# Convert to human readable format
-function human_readable() {
-    local bytes=$1
-    if [ -z "$bytes" ]; then echo "0 B"; return; fi
-    awk -v b="$bytes" 'BEGIN {
+human_readable() {
+	awk -v b="${1:-0}" 'BEGIN {
         split("B KB MB GB TB", units);
-        u=1;
-        while(b >= 1024 && u < 5) { b/=1024; u++ }
+        u = 1;
+        while (b >= 1024 && u < 5) { b /= 1024; u++ }
         printf "%.2f %s", b, units[u]
     }'
+}
+
+# Usage: print_split <title> <bytes_iface1> <bytes_iface2>
+print_split() {
+	local total=$(($2 + $3))
+	[ "$total" -gt 0 ] || return 0
+	echo "$1 Distribution:"
+	awk -v a="$2" -v t="$total" -v n="$IFACE1" 'BEGIN { printf "  %s: %.1f%%\n", n, a * 100 / t }'
+	awk -v a="$3" -v t="$total" -v n="$IFACE2" 'BEGIN { printf "  %s: %.1f%%\n", n, a * 100 / t }'
+	echo ""
 }
 
 echo "=== Traffic in last $DURATION seconds ==="
 echo ""
 echo "$IFACE1:"
-echo "  TX (Upload):   $(human_readable $I1_TX_DIFF)"
-echo "  RX (Download): $(human_readable $I1_RX_DIFF)"
+echo "  TX (Upload):   $(human_readable "$I1_TX_DIFF")"
+echo "  RX (Download): $(human_readable "$I1_RX_DIFF")"
 echo ""
 echo "$IFACE2:"
-echo "  TX (Upload):   $(human_readable $I2_TX_DIFF)"
-echo "  RX (Download): $(human_readable $I2_RX_DIFF)"
+echo "  TX (Upload):   $(human_readable "$I2_TX_DIFF")"
+echo "  RX (Download): $(human_readable "$I2_RX_DIFF")"
 echo ""
 
-# Calculate total traffic and percentages
-TOTAL_TX=$((I1_TX_DIFF + I2_TX_DIFF))
-TOTAL_RX=$((I1_RX_DIFF + I2_RX_DIFF))
+print_split "Upload" "$I1_TX_DIFF" "$I2_TX_DIFF"
+print_split "Download" "$I1_RX_DIFF" "$I2_RX_DIFF"
 
-if [ $TOTAL_TX -gt 0 ]; then
-    I1_TX_PERCENT=$(awk "BEGIN {printf \"%.1f\", $I1_TX_DIFF * 100 / $TOTAL_TX}")
-    I2_TX_PERCENT=$(awk "BEGIN {printf \"%.1f\", $I2_TX_DIFF * 100 / $TOTAL_TX}")
-    echo "Upload Distribution:"
-    echo "  $IFACE1: ${I1_TX_PERCENT}%"
-    echo "  $IFACE2: ${I2_TX_PERCENT}%"
-    echo ""
-fi
-
-if [ $TOTAL_RX -gt 0 ]; then
-    I1_RX_PERCENT=$(awk "BEGIN {printf \"%.1f\", $I1_RX_DIFF * 100 / $TOTAL_RX}")
-    I2_RX_PERCENT=$(awk "BEGIN {printf \"%.1f\", $I2_RX_DIFF * 100 / $TOTAL_RX}")
-    echo "Download Distribution:"
-    echo "  $IFACE1: ${I1_RX_PERCENT}%"
-    echo "  $IFACE2: ${I2_RX_PERCENT}%"
-fi
-
-echo ""
 echo "========================================"

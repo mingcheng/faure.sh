@@ -11,14 +11,8 @@
 # File Created: 2025-12-27 23:53:23
 #
 # Modified By: mingcheng <mingcheng@apache.org>
-# Last Modified: 2026-01-19 11:07:40
+# Last Modified: 2026-10-05 10:00:00
 ##
-
-# Colors for PASS/FAIL/WARN labels
-GREEN='\033[0;32m'
-RED='\033[0;31m'
-YELLOW='\033[1;33m'
-NC='\033[0m'
 
 # Source shared configuration & utilities (config.sh is required).
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -26,9 +20,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/utils.sh"
 
 # Override utils.sh logging with verifier-style PASS/FAIL labels (no timestamp).
-log_pass() { echo -e "${GREEN}[PASS]${NC} $1"; }
-log_fail() { echo -e "${RED}[FAIL]${NC} $1"; }
-log_warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
+log_pass() { echo -e "${COLOR_GREEN}[PASS]${COLOR_NC} $1"; }
+log_fail() { echo -e "${COLOR_RED}[FAIL]${COLOR_NC} $1"; }
+log_warn() { echo -e "${COLOR_YELLOW}[WARN]${COLOR_NC} $1"; }
 log_info() { echo -e "       $1"; }
 
 echo "=============================================="
@@ -92,7 +86,7 @@ else
     log_fail "Chain MULTIPATH_MARK missing."
 fi
 
-if iptables -t mangle -L $CHAIN_NAME -n >/dev/null 2>&1; then
+if iptables -t mangle -L "$CHAIN_NAME" -n >/dev/null 2>&1; then
     log_pass "Chain $CHAIN_NAME exists."
 else
     log_warn "Chain $CHAIN_NAME missing (TProxy might not be running)."
@@ -109,25 +103,22 @@ fi
 # 3b. TTL / Hop-Limit Bypass (tethering detection)
 echo ""
 echo "--- 3b. TTL / Hop-Limit Bypass ---"
-ttl_enabled="${TTL_BYPASS_ENABLED:-1}"
-case "$ttl_enabled" in
-    1|true|TRUE|yes|on) ttl_enabled=1 ;;
-    *)                  ttl_enabled=0 ;;
-esac
+
+# Print the value of the first live TTL/HL rewrite rule on an iface.
+# Usage: live_rewrite_value <iptables|ip6tables> <TTL|HL> <iface>
+live_rewrite_value() {
+    egress_rewrite_rules "$1" "$2" "$3" \
+        | sed -nE 's/.*--(ttl|hl)-set[[:space:]]+([0-9]+).*/\2/p' | head -n 1
+}
 
 check_ttl_iface() {
-    local iface="$1"
-    [ -z "$iface" ] && return
-    if ! ip link show "$iface" >/dev/null 2>&1; then
-        return
-    fi
+    local iface="$1" v4 v6
+    [ -n "$iface" ] || return
+    ip link show "$iface" >/dev/null 2>&1 || return
 
-    local v4
-    v4=$(iptables -t mangle -S POSTROUTING 2>/dev/null \
-        | grep -E -- "-o[[:space:]]+${iface}([[:space:]]|$).*-j[[:space:]]+TTL" \
-        | sed -nE 's/.*--ttl-set[[:space:]]+([0-9]+).*/\1/p' | head -n 1)
+    v4=$(live_rewrite_value iptables TTL "$iface")
 
-    if [ "$ttl_enabled" -eq 1 ]; then
+    if ttl_bypass_enabled; then
         if [ -n "$v4" ]; then
             log_pass "IPv4 TTL pinned to $v4 on $iface."
             if [ -n "${TTL_BYPASS_VALUE:-}" ] && [ "$v4" != "$TTL_BYPASS_VALUE" ]; then
@@ -138,10 +129,7 @@ check_ttl_iface() {
         fi
 
         if command -v ip6tables >/dev/null 2>&1; then
-            local v6
-            v6=$(ip6tables -t mangle -S POSTROUTING 2>/dev/null \
-                | grep -E -- "-o[[:space:]]+${iface}([[:space:]]|$).*-j[[:space:]]+HL" \
-                | sed -nE 's/.*--hl-set[[:space:]]+([0-9]+).*/\1/p' | head -n 1)
+            v6=$(live_rewrite_value ip6tables HL "$iface")
             if [ -n "$v6" ]; then
                 log_pass "IPv6 Hop-Limit pinned to $v6 on $iface."
             else
@@ -170,16 +158,14 @@ TEST_URL="http://connect.rom.miui.com/generate_204"
 IP_API="http://myip.ipip.net"
 
 check_iface() {
-    local iface=$1
+    local iface=$1 ip_addr ext_ip
 
-    # Check if interface exists
     if ! ip link show "$iface" >/dev/null 2>&1; then
         log_warn "Interface $iface does not exist. Skipping."
         return
     fi
 
-    local ip_addr=$(ip -4 addr show dev $iface | awk '/inet / {print $2}' | cut -d/ -f1 | head -n 1)
-
+    ip_addr=$(get_ip "$iface")
     if [ -z "$ip_addr" ]; then
         log_warn "Interface $iface has no IP address."
         return
@@ -187,14 +173,12 @@ check_iface() {
 
     echo "Testing interface: $iface ($ip_addr)..."
 
-    # Test basic connectivity
-    if curl --interface $iface --connect-timeout 3 -s -o /dev/null $TEST_URL; then
+    if curl --interface "$iface" --connect-timeout 3 -s -o /dev/null "$TEST_URL"; then
         log_pass "$iface can reach Internet."
 
-        # Test External IP (Optional)
-        EXT_IP=$(curl --interface $iface --connect-timeout 5 -s $IP_API)
-        if [ -n "$EXT_IP" ]; then
-            log_info "External IP via $iface: $EXT_IP"
+        ext_ip=$(curl --interface "$iface" --connect-timeout 5 -s "$IP_API")
+        if [ -n "$ext_ip" ]; then
+            log_info "External IP via $iface: $ext_ip"
         else
             log_warn "Could not fetch external IP via $iface."
         fi

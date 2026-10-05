@@ -10,24 +10,31 @@
 # Usage: ./monitor-traffic-limit.sh <interface> <limit_gb> [warning_percent] [alert_script]
 # Example: ./monitor-traffic-limit.sh eth0 1000 80 /path/to/alert.sh
 #
-# This source code is licensed under the MIT License.
+# The alert script (if executable) is called as:
+#   <alert_script> <WARNING|BLOCK> <interface> <usage_gb> <limit_gb>
+#
+# This source code is licensed under the MIT License,
+# which is located in the LICENSE file in the source tree's root directory.
+#
+# File: monitor-traffic-limit.sh
+# Author: mingcheng <mingcheng@apache.org>
+#
+# Modified By: mingcheng <mingcheng@apache.org>
+# Last Modified: 2026-10-05 10:00:00
+##
 
 set -u
 
-# Source utils.sh for log_info / log_warn / log_error (config.sh too).
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=utils.sh
-[ -f "$SCRIPT_DIR/utils.sh" ] && source "$SCRIPT_DIR/utils.sh"
+source "$SCRIPT_DIR/utils.sh"
 
 # --- Configuration ---
 IFACE="${1:-}"
 LIMIT_GB="${2:-}"
 WARNING_PERCENT="${3:-80}"
 ALERT_SCRIPT="${4:-}"
-
-STATE_DIR="/var/lib/faure/traffic"
-STATE_FILE="$STATE_DIR/${IFACE}.state"
-LOCK_FILE="/var/run/traffic_monitor_${IFACE}.lock"
+BYTES_PER_GB=1073741824
 
 # --- Validation ---
 if [ -z "$IFACE" ] || [ -z "$LIMIT_GB" ]; then
@@ -35,208 +42,168 @@ if [ -z "$IFACE" ] || [ -z "$LIMIT_GB" ]; then
     exit 1
 fi
 
-if [ ! -d "/sys/class/net/$IFACE" ]; then
-    echo "Error: Interface $IFACE not found."
+# IFACE is used to build file paths below, so reject anything but a name.
+if ! [[ $IFACE =~ ^[A-Za-z0-9_.:@-]+$ ]] || [ "$IFACE" = "." ] || [ "$IFACE" = ".." ] \
+    || [ ! -d "/sys/class/net/$IFACE" ]; then
+    log_error "Interface '$IFACE' not found."
     exit 1
 fi
 
-# Ensure state directory exists
+if ! [[ $LIMIT_GB =~ ^[0-9]+$ ]] || ! [[ $WARNING_PERCENT =~ ^[0-9]+$ ]]; then
+    log_error "limit_gb and warning_percent must be non-negative integers."
+    exit 1
+fi
+
+STATE_DIR="/var/lib/faure/traffic"
+STATE_FILE="$STATE_DIR/${IFACE}.state"
+LOCK_FILE="/run/traffic_monitor_${IFACE}.lock"
+
 mkdir -p "$STATE_DIR"
 
 # --- Helper Functions ---
 
-# Get current RX and TX bytes
+# Current RX + TX byte counters of $IFACE (reset on reboot).
 get_bytes() {
-    local rx=$(cat "/sys/class/net/$IFACE/statistics/rx_bytes")
-    local tx=$(cat "/sys/class/net/$IFACE/statistics/tx_bytes")
+    local rx tx
+    rx=$(cat "/sys/class/net/$IFACE/statistics/rx_bytes")
+    tx=$(cat "/sys/class/net/$IFACE/statistics/tx_bytes")
     echo "$((rx + tx))"
 }
 
-# Get traffic from vnStat if available
+# Print this month's RX + TX bytes for $IFACE from vnStat. Returns 1 when
+# vnStat (or its data for $IFACE) is unavailable.
 get_vnstat_bytes() {
-    if ! command -v vnstat >/dev/null 2>&1; then
-        return 1
-    fi
+    command -v vnstat >/dev/null 2>&1 || return 1
 
-    # Check if interface is monitored
-    if ! LC_ALL=C vnstat -i "$IFACE" --oneline >/dev/null 2>&1; then
-        return 1
-    fi
-
-    # Try JSON output (vnStat 2.x)
-    if LC_ALL=C vnstat --json -i "$IFACE" >/dev/null 2>&1 && command -v jq >/dev/null 2>&1; then
-        local current_year=$(date +%Y)
-        local current_month=$(date +%m | sed 's/^0//')
-
-        local bytes=$(LC_ALL=C vnstat --json -i "$IFACE" | jq -r --arg y "$current_year" --arg m "$current_month" '
-            .interfaces[0].traffic.month[] | select(.date.year == ($y|tonumber) and .date.month == ($m|tonumber)) | .rx + .tx
-        ')
-
-        if [ -n "$bytes" ] && [ "$bytes" != "null" ]; then
+    local json bytes
+    # vnStat 2.x JSON (jsonversion 2) reports plain bytes.
+    if command -v jq >/dev/null 2>&1 && json=$(LC_ALL=C vnstat --json m -i "$IFACE" 2>/dev/null); then
+        bytes=$(jq -r --argjson y "$(date +%Y)" --argjson m "$(date +%-m)" '
+            .interfaces[0].traffic.month[]?
+            | select(.date.year == $y and .date.month == $m) | .rx + .tx
+        ' <<<"$json" 2>/dev/null)
+        if [[ $bytes =~ ^[0-9]+$ ]]; then
             echo "$bytes"
             return 0
         fi
     fi
 
-    # Fallback to oneline output parsing
-    local output=$(LC_ALL=C vnstat -i "$IFACE" --oneline 2>/dev/null)
-    if [ -n "$output" ]; then
-        # Field 10 is month total (e.g., "10.50 GiB")
-        local month_total_str=$(echo "$output" | cut -d';' -f10)
-
-        # Convert to bytes
-        echo "$month_total_str" | awk '
-            function to_bytes(val, unit) {
-                if (unit ~ /KiB/) return val * 1024;
-                if (unit ~ /MiB/) return val * 1024 * 1024;
-                if (unit ~ /GiB/) return val * 1024 * 1024 * 1024;
-                if (unit ~ /TiB/) return val * 1024 * 1024 * 1024 * 1024;
-                if (unit ~ /KB/) return val * 1000;
-                if (unit ~ /MB/) return val * 1000 * 1000;
-                if (unit ~ /GB/) return val * 1000 * 1000 * 1000;
-                if (unit ~ /TB/) return val * 1000 * 1000 * 1000 * 1000;
-                return val;
-            }
-            {
-                print sprintf("%.0f", to_bytes($1, $2))
-            }
-        '
-        return 0
-    fi
-
-    return 1
+    # Fallback: --oneline field 11 is the current month's total, e.g. "10.50 GiB".
+    local output
+    output=$(LC_ALL=C vnstat -i "$IFACE" --oneline 2>/dev/null) || return 1
+    [ -n "$output" ] || return 1
+    echo "$output" | cut -d';' -f11 | awk '
+        {
+            v = $1; u = $2
+            if (u == "KiB") v *= 1024; else if (u == "MiB") v *= 1024^2
+            else if (u == "GiB") v *= 1024^3; else if (u == "TiB") v *= 1024^4
+            else if (u == "KB") v *= 1000; else if (u == "MB") v *= 1000^2
+            else if (u == "GB") v *= 1000^3; else if (u == "TB") v *= 1000^4
+            printf "%.0f\n", v
+        }'
 }
 
-# Logging fallback if utils.sh wasn't available for some reason.
-type log_info >/dev/null 2>&1 || log_info()  { echo "[$(date '+%Y-%m-%d %H:%M:%S')] [INFO] $*"; }
-type log_warn >/dev/null 2>&1 || log_warn()  { echo "[$(date '+%Y-%m-%d %H:%M:%S')] [WARN] $*" >&2; }
-type log_error >/dev/null 2>&1 || log_error() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] [ERROR] $*" >&2; }
-
-# Block interface
-# Docker compatibility: this rule is intentionally inserted at the TOP of the
-# builtin FORWARD chain so it preempts the jump to DOCKER-USER. That is the
-# desired behaviour for hard traffic caps -- once the cap is hit we want to
-# stop ALL forwarded traffic for that uplink, including container egress.
+# Docker compatibility: these rules are intentionally inserted at the TOP of
+# the builtin FORWARD chain so they preempt the jump to DOCKER-USER. Once the
+# cap is hit we want to stop ALL forwarded traffic for that uplink,
+# including container egress.
 block_interface() {
     log_info "Blocking internet access for $IFACE..."
-
-    # Block forwarding (idempotent insert)
     iptables -C FORWARD -i "$IFACE" -j DROP 2>/dev/null || iptables -I FORWARD -i "$IFACE" -j DROP
     iptables -C FORWARD -o "$IFACE" -j DROP 2>/dev/null || iptables -I FORWARD -o "$IFACE" -j DROP
-
-    # Execute alert script if provided
-    if [ -n "$ALERT_SCRIPT" ] && [ -x "$ALERT_SCRIPT" ]; then
-        "$ALERT_SCRIPT" "BLOCK" "$IFACE" "$CURRENT_USAGE_GB" "$LIMIT_GB"
-    fi
+    run_alert "BLOCK"
 }
 
-# Unblock interface
 unblock_interface() {
     log_info "Unblocking internet access for $IFACE..."
-
-    iptables -D FORWARD -i "$IFACE" -j DROP 2>/dev/null || true
-    iptables -D FORWARD -o "$IFACE" -j DROP 2>/dev/null || true
+    while iptables -D FORWARD -i "$IFACE" -j DROP 2>/dev/null; do :; done
+    while iptables -D FORWARD -o "$IFACE" -j DROP 2>/dev/null; do :; done
 }
 
-# Send warning
 send_warning() {
-    log_warn "Traffic usage for $IFACE is at ${1}% ($CURRENT_USAGE_GB GB / $LIMIT_GB GB)"
+    log_warn "Traffic usage for $IFACE is at or above ${WARNING_PERCENT}% ($CURRENT_USAGE_GB GB / $LIMIT_GB GB)"
+    run_alert "WARNING"
+}
+
+run_alert() {
     if [ -n "$ALERT_SCRIPT" ] && [ -x "$ALERT_SCRIPT" ]; then
-        "$ALERT_SCRIPT" "WARNING" "$IFACE" "$CURRENT_USAGE_GB" "$LIMIT_GB"
+        "$ALERT_SCRIPT" "$1" "$IFACE" "$CURRENT_USAGE_GB" "$LIMIT_GB" || log_warn "Alert script exited non-zero."
     fi
 }
 
 # --- Main Logic ---
 
-# Acquire lock to prevent concurrent runs
+# Prevent concurrent runs for the same interface.
 exec 9>"$LOCK_FILE"
-flock -n 9 || { echo "Script is already running."; exit 1; }
+flock -n 9 || {
+    log_warn "Another instance is already running for $IFACE."
+    exit 1
+}
 
 CURRENT_BYTES=$(get_bytes)
 CURRENT_MONTH=$(date +%Y-%m)
 
-# Load state
 # State file format: MONTH LAST_BYTES ACCUMULATED_BYTES BLOCKED_STATUS WARNING_SENT
+STORED_MONTH="" LAST_BYTES="" ACCUMULATED_BYTES="" BLOCKED_STATUS="" WARNING_SENT=""
 if [ -f "$STATE_FILE" ]; then
-    read -r STORED_MONTH LAST_BYTES ACCUMULATED_BYTES BLOCKED_STATUS WARNING_SENT < "$STATE_FILE"
-else
-    STORED_MONTH="$CURRENT_MONTH"
-    LAST_BYTES="$CURRENT_BYTES"
-    ACCUMULATED_BYTES="0"
-    BLOCKED_STATUS="0"
-    WARNING_SENT="0"
+    read -r STORED_MONTH LAST_BYTES ACCUMULATED_BYTES BLOCKED_STATUS WARNING_SENT <"$STATE_FILE"
 fi
+# Fall back to fresh values for a missing or corrupted state file.
+[[ $STORED_MONTH =~ ^[0-9]{4}-[0-9]{2}$ ]] || STORED_MONTH="$CURRENT_MONTH"
+[[ $LAST_BYTES =~ ^[0-9]+$ ]] || LAST_BYTES="$CURRENT_BYTES"
+[[ $ACCUMULATED_BYTES =~ ^[0-9]+$ ]] || ACCUMULATED_BYTES=0
+[[ $BLOCKED_STATUS =~ ^[01]$ ]] || BLOCKED_STATUS=0
+[[ $WARNING_SENT =~ ^[01]$ ]] || WARNING_SENT=0
 
-# Handle Month Reset
 if [ "$CURRENT_MONTH" != "$STORED_MONTH" ]; then
     log_info "New month detected. Resetting counters for $IFACE."
     STORED_MONTH="$CURRENT_MONTH"
-    ACCUMULATED_BYTES="0"
-    LAST_BYTES="$CURRENT_BYTES" # Reset baseline
-    BLOCKED_STATUS="0"
-    WARNING_SENT="0"
+    ACCUMULATED_BYTES=0
+    LAST_BYTES="$CURRENT_BYTES"
+    BLOCKED_STATUS=0
+    WARNING_SENT=0
     unblock_interface
 fi
 
-# Try to get traffic from vnStat
-VNSTAT_BYTES=$(get_vnstat_bytes)
-if [ $? -eq 0 ] && [ -n "$VNSTAT_BYTES" ]; then
-    # Use vnStat data
+if VNSTAT_BYTES=$(get_vnstat_bytes) && [[ $VNSTAT_BYTES =~ ^[0-9]+$ ]]; then
     ACCUMULATED_BYTES="$VNSTAT_BYTES"
-    # We still update LAST_BYTES to keep the internal counter in sync for potential fallback
-    LAST_BYTES="$CURRENT_BYTES"
 else
-    # Fallback to internal calculation
-    # Calculate Delta
+    # Internal accounting: a counter that went backwards means a reboot or
+    # a re-created interface, so count from zero.
     if [ "$CURRENT_BYTES" -lt "$LAST_BYTES" ]; then
-        # Reboot or counter overflow detected
         DELTA="$CURRENT_BYTES"
     else
         DELTA=$((CURRENT_BYTES - LAST_BYTES))
     fi
-
-    # Update Accumulator
     ACCUMULATED_BYTES=$((ACCUMULATED_BYTES + DELTA))
-    LAST_BYTES="$CURRENT_BYTES"
 fi
+# Always track the raw counter so a later vnStat outage resumes cleanly.
+LAST_BYTES="$CURRENT_BYTES"
 
-# Convert to GB for comparison (1 GB = 1073741824 bytes)
-CURRENT_USAGE_GB=$(awk "BEGIN {printf \"%.2f\", $ACCUMULATED_BYTES / 1073741824}")
+CURRENT_USAGE_GB=$(awk -v b="$ACCUMULATED_BYTES" -v g="$BYTES_PER_GB" 'BEGIN { printf "%.2f", b / g }')
+LIMIT_BYTES=$((LIMIT_GB * BYTES_PER_GB))
+WARNING_BYTES=$((LIMIT_BYTES / 100 * WARNING_PERCENT))
 
-# Check Limits
-LIMIT_BYTES=$((LIMIT_GB * 1073741824))
-WARNING_BYTES=$(awk "BEGIN {printf \"%.0f\", $LIMIT_BYTES * $WARNING_PERCENT / 100}")
-
-# 1. Check Block Limit
 if [ "$ACCUMULATED_BYTES" -ge "$LIMIT_BYTES" ]; then
-    if [ "$BLOCKED_STATUS" -eq "0" ]; then
+    if [ "$BLOCKED_STATUS" -eq 0 ]; then
         log_warn "Limit exceeded ($CURRENT_USAGE_GB GB >= $LIMIT_GB GB). Initiating block."
         block_interface
-        BLOCKED_STATUS="1"
-    fi
-# 2. Check Warning Threshold
-elif [ "$ACCUMULATED_BYTES" -ge "$WARNING_BYTES" ]; then
-    if [ "$WARNING_SENT" -eq "0" ]; then
-        send_warning "$WARNING_PERCENT"
-        WARNING_SENT="1"
-    fi
-    # Ensure we are unblocked if we are below limit (e.g. limit increased manually)
-    if [ "$BLOCKED_STATUS" -eq "1" ]; then
-         unblock_interface
-         BLOCKED_STATUS="0"
+        BLOCKED_STATUS=1
     fi
 else
-    # Normal operation
-    if [ "$BLOCKED_STATUS" -eq "1" ]; then
-         unblock_interface
-         BLOCKED_STATUS="0"
+    if [ "$ACCUMULATED_BYTES" -ge "$WARNING_BYTES" ] && [ "$WARNING_SENT" -eq 0 ]; then
+        send_warning
+        WARNING_SENT=1
+    fi
+    # Below the cap (e.g. limit raised manually): lift any previous block.
+    if [ "$BLOCKED_STATUS" -eq 1 ]; then
+        unblock_interface
+        BLOCKED_STATUS=0
     fi
 fi
 
-# Save State
-echo "$STORED_MONTH $LAST_BYTES $ACCUMULATED_BYTES $BLOCKED_STATUS $WARNING_SENT" > "$STATE_FILE"
+echo "$STORED_MONTH $LAST_BYTES $ACCUMULATED_BYTES $BLOCKED_STATUS $WARNING_SENT" >"$STATE_FILE"
 
-# Output status
 echo "Interface: $IFACE"
 echo "Month: $STORED_MONTH"
 echo "Usage: $CURRENT_USAGE_GB GB / $LIMIT_GB GB"

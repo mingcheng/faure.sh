@@ -11,7 +11,7 @@
 # File Created: 2025-03-19 14:32:47
 #
 # Modified By: mingcheng <mingcheng@apache.org>
-# Last Modified: 2026-05-09
+# Last Modified: 2026-10-05 10:00:00
 ##
 #
 # Docker compatibility notes:
@@ -35,23 +35,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=utils.sh
 source "$SCRIPT_DIR/utils.sh"
 
-# All tunables come from config.sh; environment variables still take precedence.
-LAN_IF="${LAN_IF:?LAN_IF not set (check config.sh)}"
-LAN_NET="${LAN_NET:?LAN_NET not set (check config.sh)}"
-TPROXY_PORT="${TPROXY_PORT:?TPROXY_PORT not set (check config.sh)}"
-TPROXY_DNS_PORT="${TPROXY_DNS_PORT:-53}"
-TPROXY_TABLE="${TPROXY_TABLE:-200}"
-TPROXY_MARK="${TPROXY_MARK:-0x1}"
-CHAIN_NAME="${CHAIN_NAME:-MIHOMO_TPROXY}"
-PRIO_TPROXY="${PRIO_TPROXY:-99}"
-
-# How long to wait for Mihomo/Clash listeners before giving up. Mihomo can
-# take ~60s (occasionally longer) to download/parse rule providers on first
-# start, so the default budget is generous. Override via env / config.
-#   TPROXY_WAIT_TIMEOUT  - total wait budget in seconds (default 300 = 5 min)
-#   TPROXY_WAIT_INTERVAL - poll interval in seconds (default 2)
-TPROXY_WAIT_TIMEOUT="${TPROXY_WAIT_TIMEOUT:-300}"
-TPROXY_WAIT_INTERVAL="${TPROXY_WAIT_INTERVAL:-2}"
+# All tunables (incl. TPROXY_WAIT_TIMEOUT / TPROXY_WAIT_INTERVAL) come from
+# config.sh; fail fast if an override blanked a mandatory one.
+: "${LAN_IF:?LAN_IF not set (check config.sh)}"
+: "${LAN_NET:?LAN_NET not set (check config.sh)}"
+: "${TPROXY_PORT:?TPROXY_PORT not set (check config.sh)}"
 
 # --- Pre-flight checks -----------------------------------------------------
 if [ "$(id -u)" -ne 0 ]; then
@@ -71,7 +59,7 @@ done
 check_listeners() {
     local tcp_listen=0 udp_dns_listen=0
     local interval="$TPROXY_WAIT_INTERVAL"
-    local deadline=$(( $(date +%s) + TPROXY_WAIT_TIMEOUT ))
+    local deadline=$(($(date +%s) + TPROXY_WAIT_TIMEOUT))
     local now elapsed remaining
 
     log_info "Waiting up to ${TPROXY_WAIT_TIMEOUT}s for TProxy listeners (TCP:$TPROXY_PORT, UDP:$TPROXY_DNS_PORT)..."
@@ -90,10 +78,10 @@ check_listeners() {
             break
         fi
 
-        remaining=$(( deadline - now ))
-        elapsed=$(( TPROXY_WAIT_TIMEOUT - remaining ))
+        remaining=$((deadline - now))
+        elapsed=$((TPROXY_WAIT_TIMEOUT - remaining))
         # Log roughly every 10s instead of every poll to keep journal quiet.
-        if [ $(( elapsed % 10 )) -lt "$interval" ]; then
+        if [ $((elapsed % 10)) -lt "$interval" ]; then
             log_info "Still waiting for listeners... (${elapsed}s elapsed, ${remaining}s remaining; TCP=$tcp_listen UDP=$udp_dns_listen)"
         fi
 
@@ -111,10 +99,8 @@ check_listeners() {
 cleanup_firewall() {
     log_info "Cleaning up existing TPROXY firewall rules..."
 
-    # Detach our chain from PREROUTING (idempotent).
-    if iptables -t mangle -C PREROUTING -i "$LAN_IF" -s "$LAN_NET" -j "$CHAIN_NAME" 2>/dev/null; then
-        iptables -t mangle -D PREROUTING -i "$LAN_IF" -s "$LAN_NET" -j "$CHAIN_NAME"
-    fi
+    # Detach our chain from PREROUTING (loop removes accidental duplicates).
+    while iptables -t mangle -D PREROUTING -i "$LAN_IF" -s "$LAN_NET" -j "$CHAIN_NAME" 2>/dev/null; do :; done
     iptables -t mangle -F "$CHAIN_NAME" 2>/dev/null || true
     iptables -t mangle -X "$CHAIN_NAME" 2>/dev/null || true
 
@@ -125,8 +111,8 @@ cleanup_firewall() {
     # NAT DNS redirect (scoped, so Docker rules are unaffected).
     local proto
     for proto in udp tcp; do
-        iptables -t nat -D PREROUTING -i "$LAN_IF" -s "$LAN_NET" -p "$proto" --dport 53 \
-            -j REDIRECT --to-ports "$TPROXY_DNS_PORT" 2>/dev/null || true
+        while iptables -t nat -D PREROUTING -i "$LAN_IF" -s "$LAN_NET" -p "$proto" --dport 53 \
+            -j REDIRECT --to-ports "$TPROXY_DNS_PORT" 2>/dev/null; do :; done
     done
 
     log_info "Cleanup completed."
@@ -152,10 +138,11 @@ setup_tproxy_chain() {
 
     log_info "Configuring TPROXY rules for TCP/UDP on port $TPROXY_PORT..."
     local proto
+    # TPROXY sets the whole fwmark itself (no mask = 0xffffffff), so the
+    # exact-match `ip rule fwmark` below hits without a separate MARK rule.
     for proto in tcp udp; do
-        iptables -t mangle -A "$CHAIN_NAME" -p "$proto" -j MARK --set-mark "$TPROXY_MARK"
         iptables -t mangle -A "$CHAIN_NAME" -p "$proto" -j TPROXY \
-            --tproxy-mark "$TPROXY_MARK/$TPROXY_MARK" --on-port "$TPROXY_PORT"
+            --tproxy-mark "$TPROXY_MARK" --on-port "$TPROXY_PORT"
     done
 
     # Append (not insert): Docker's DOCKER chain still gets first crack at

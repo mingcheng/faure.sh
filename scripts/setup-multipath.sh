@@ -11,52 +11,34 @@
 # File Created: 2025-12-27 23:13:18
 #
 # Modified By: mingcheng <mingcheng@apache.org>
-# Last Modified: 2025-12-30 21:59:53
+# Last Modified: 2026-10-05 10:00:00
 ##
 
-# Exit on error
-set -e
+set -o errexit -o nounset -o pipefail
 
-# Source utility functions
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=utils.sh
 source "$SCRIPT_DIR/utils.sh"
-
-# --- Execution ---
 
 log_info "Configuring multipath routing..."
 
-HAS_SECONDARY_UPLINK=0
-if secondary_uplink_enabled; then
-    HAS_SECONDARY_UPLINK=1
-else
-    log_info "Single-uplink mode detected; secondary uplink is disabled."
+# IF2 is "configured" when set and distinct from IF1; it is only *used* when
+# it also has an IPv4 address (see secondary_uplink_enabled).
+IF2_CONFIGURED=0
+if [ -n "${IF2:-}" ] && [ "$IF2" != "$IF1" ]; then
+    IF2_CONFIGURED=1
 fi
 
-# Wait for network initialization (up to 60 seconds)
-# This prevents the script from failing immediately at boot if DHCP is slow
-MAX_RETRIES=30
-RETRY_DELAY=2
-count=0
+# Wait up to 60s for DHCP so a slow boot does not abort the setup.
+WAIT_IFACES=("$IF1")
+[ "$IF2_CONFIGURED" -eq 1 ] && WAIT_IFACES+=("$IF2")
+wait_for_ip 30 2 "${WAIT_IFACES[@]}" || true
 
-while [ $count -lt $MAX_RETRIES ]; do
-    if [ -n "$(get_ip "$IF1")" ] || { [ "$HAS_SECONDARY_UPLINK" -eq 1 ] && [ -n "$(get_ip "$IF2")" ]; }; then
-        break
-    fi
-
-    if [ $((count % 5)) -eq 0 ]; then
-        log_info "Waiting for any interface to obtain IP address... ($((count+1))/$MAX_RETRIES)"
-    fi
-    sleep $RETRY_DELAY
-    count=$((count+1))
-done
-
-IP1=$(get_ip "$IF1")
-IP2=""
-[ "$HAS_SECONDARY_UPLINK" -eq 1 ] && IP2=$(get_ip "$IF2")
-
-# Check which interfaces are available
+# --- Uplink discovery ------------------------------------------------------
 HAS_IF1=0
 HAS_IF2=0
+IP1=$(get_ip "$IF1")
+IP2=""
 
 if [ -n "$IP1" ]; then
     log_info "$IF1 IP: $IP1"
@@ -65,274 +47,244 @@ else
     log_warn "No IP for $IF1. Skipping $IF1 configuration."
 fi
 
-if [ "$HAS_SECONDARY_UPLINK" -eq 0 ]; then
-    :
-elif [ -n "$IP2" ]; then
+if secondary_uplink_enabled; then
+    IP2=$(get_ip "$IF2")
     log_info "$IF2 IP: $IP2"
     HAS_IF2=1
+elif [ "$IF2_CONFIGURED" -eq 1 ]; then
+    log_warn "No IP for $IF2. Running in single-uplink mode."
 else
-    log_warn "No IP for $IF2. Skipping $IF2 configuration."
+    log_info "Single-uplink mode: secondary uplink is disabled."
 fi
 
 if [ "$HAS_IF1" -eq 0 ] && [ "$HAS_IF2" -eq 0 ]; then
-    if [ "$HAS_SECONDARY_UPLINK" -eq 1 ]; then
-        log_error "Neither $IF1 nor $IF2 has an IP address. Exiting."
-    else
-        log_error "$IF1 has no IP address. Exiting."
-    fi
+    log_error "No uplink has an IPv4 address. Exiting."
     exit 1
 fi
 
-# Detect Subnets
 SUBNET1=""
 SUBNET2=""
-if [ "$HAS_IF1" -eq 1 ]; then
-    SUBNET1=$(get_subnet "$IF1")
-    log_info "$IF1 Subnet: $SUBNET1"
-fi
-if [ "$HAS_IF2" -eq 1 ]; then
-    SUBNET2=$(get_subnet "$IF2")
-    log_info "$IF2 Subnet: $SUBNET2"
-fi
-
-# Detect Gateways
 GW1=""
 GW2=""
 if [ "$HAS_IF1" -eq 1 ]; then
+    SUBNET1=$(get_subnet "$IF1")
     GW1=$(get_gateway "$IF1" "$TABLE1")
-    if [ -z "$GW1" ]; then
-        log_error "No Gateway for $IF1"
+    if [ -n "$GW1" ]; then
+        log_info "$IF1 subnet: ${SUBNET1:-?}, gateway: $GW1"
+    else
+        log_error "No gateway for $IF1"
         HAS_IF1=0
-    else
-        log_info "$IF1 Gateway: $GW1"
     fi
 fi
-
 if [ "$HAS_IF2" -eq 1 ]; then
+    SUBNET2=$(get_subnet "$IF2")
     GW2=$(get_gateway "$IF2" "$TABLE2")
-    if [ -z "$GW2" ]; then
-        log_error "No Gateway for $IF2"
-        HAS_IF2=0
+    if [ -n "$GW2" ]; then
+        log_info "$IF2 subnet: ${SUBNET2:-?}, gateway: $GW2"
     else
-        log_info "$IF2 Gateway: $GW2"
+        log_error "No gateway for $IF2"
+        HAS_IF2=0
     fi
 fi
 
-# --- Connectivity Check ---
+# --- Connectivity check ----------------------------------------------------
+# An uplink that fails the probe keeps its own table/rules (so it stays
+# reachable for debugging) but is excluded from the main default route.
 IF1_UP=0
 IF2_UP=0
-
 if [ "$HAS_IF1" -eq 1 ]; then
     log_info "Verifying connectivity for $IF1 via $GW1..."
     if check_connectivity "$IF1" "$GW1"; then
         log_info "$IF1 is UP"
         IF1_UP=1
     else
-        log_warn "$IF1 failed connectivity check (Traffic will be routed but excluded from load balancing)."
-        # We KEEP HAS_IF1=1 so that we can still access the interface for debugging/recovery
+        log_warn "$IF1 failed connectivity check; excluding it from the default route."
     fi
 fi
-
 if [ "$HAS_IF2" -eq 1 ]; then
     log_info "Verifying connectivity for $IF2 via $GW2..."
     if check_connectivity "$IF2" "$GW2"; then
         log_info "$IF2 is UP"
         IF2_UP=1
     else
-        log_warn "$IF2 failed connectivity check (Traffic will be routed but excluded from load balancing)."
-        # KEEP HAS_IF2=1
+        log_warn "$IF2 failed connectivity check; excluding it from the default route."
     fi
 fi
 
-if [ "$IF1_UP" -eq 0 ] && [ "$IF2_UP" -eq 0 ]; then
-    log_error "No interfaces have internet connectivity. Proceeding to clear routing."
-fi
-
-# Flush old routing table rules
+# --- Per-uplink routing tables ---------------------------------------------
 log_info "Flushing old routing tables..."
-ip route flush table $TABLE1 2>/dev/null || true
-ip route flush table $TABLE2 2>/dev/null || true
+ip route flush table "$TABLE1" 2>/dev/null || true
+ip route flush table "$TABLE2" 2>/dev/null || true
 
-# Configure Table 1 ($IF1)
+# Each table holds the on-link subnets (so local peers stay reachable) plus a
+# default route via its own uplink; src pins the correct source address.
 if [ "$HAS_IF1" -eq 1 ]; then
     log_info "Configuring route table $TABLE1..."
-    # Add local subnet routes to table to ensure local traffic works
-    # Use src hint to ensure correct source IP selection
-    [ -n "$SUBNET1" ] && ip route add $SUBNET1 dev $IF1 src $IP1 table $TABLE1
-    [ -n "$SUBNET2" ] && ip route add $SUBNET2 dev $IF2 table $TABLE1 2>/dev/null || true
-    ip route add default via $GW1 dev $IF1 src $IP1 table $TABLE1
+    [ -n "$SUBNET1" ] && ip route replace "$SUBNET1" dev "$IF1" src "$IP1" table "$TABLE1"
+    [ -n "$SUBNET2" ] && { ip route replace "$SUBNET2" dev "$IF2" table "$TABLE1" 2>/dev/null || true; }
+    ip route replace default via "$GW1" dev "$IF1" src "$IP1" table "$TABLE1"
 fi
-
-# Configure Table 2 ($IF2)
 if [ "$HAS_IF2" -eq 1 ]; then
     log_info "Configuring route table $TABLE2..."
-    [ -n "$SUBNET1" ] && ip route add $SUBNET1 dev $IF1 table $TABLE2 2>/dev/null || true
-    [ -n "$SUBNET2" ] && ip route add $SUBNET2 dev $IF2 src $IP2 table $TABLE2
-    ip route add default via $GW2 dev $IF2 src $IP2 table $TABLE2
+    [ -n "$SUBNET1" ] && { ip route replace "$SUBNET1" dev "$IF1" table "$TABLE2" 2>/dev/null || true; }
+    [ -n "$SUBNET2" ] && ip route replace "$SUBNET2" dev "$IF2" src "$IP2" table "$TABLE2"
+    ip route replace default via "$GW2" dev "$IF2" src "$IP2" table "$TABLE2"
 fi
 
-# Cleanup old policy routing rules
-log_info "Cleaning up old policy rules..."
-# Delete all rules with specific priorities to handle IP changes cleanly
-while ip rule del priority $PRIO_SRC1 2>/dev/null; do :; done
-while ip rule del priority $PRIO_SRC2 2>/dev/null; do :; done
+# --- Source-based policy rules ---------------------------------------------
+log_info "Refreshing source policy rules..."
+# Delete by priority so a changed IP never leaves a stale rule behind.
+while ip rule del priority "$PRIO_SRC1" 2>/dev/null; do :; done
+while ip rule del priority "$PRIO_SRC2" 2>/dev/null; do :; done
 
-# Add new policy routing rules
-log_info "Adding new policy rules..."
 if [ "$HAS_IF1" -eq 1 ]; then
-    ip rule add from $IP1 table $TABLE1 priority $PRIO_SRC1
+    ip rule add from "$IP1" table "$TABLE1" priority "$PRIO_SRC1"
 fi
 if [ "$HAS_IF2" -eq 1 ]; then
-    ip rule add from $IP2 table $TABLE2 priority $PRIO_SRC2
-    # Ensure traffic originating from eth2 subnet uses table 2
-    [ -n "$SUBNET2" ] && ip rule add from $SUBNET2 table $TABLE2 priority $PRIO_SRC2
+    ip rule add from "$IP2" table "$TABLE2" priority "$PRIO_SRC2"
+    # Anything sourced from the $IF2 subnet must also leave via $IF2.
+    if [ -n "$SUBNET2" ]; then
+        ip rule add from "$SUBNET2" table "$TABLE2" priority "$PRIO_SRC2"
+    fi
 fi
 
-# --- Docker/NAT Compatibility (Connection Marking) ---
+# --- Connection marking (Docker/NAT compatible) ----------------------------
 log_info "Configuring connection marking..."
-# MARK variables loaded from config.sh
-
 iptables -t mangle -N MULTIPATH_MARK 2>/dev/null || true
 iptables -t mangle -F MULTIPATH_MARK
 iptables -t mangle -A MULTIPATH_MARK -j CONNMARK --restore-mark
 
 # Bypass LAN-sourced traffic FIRST so it never gets stamped with a WAN mark.
-# This is critical when LAN_IF coincides with one of the WAN uplinks (i.e.
-# LAN and WAN share the same physical NIC). Without this, LAN client traffic
-# entering on $LAN_IF would match the per-uplink rule below, get tagged with
-# the WAN mark, and be force-routed via that uplink's table on the return
-# path -- breaking forwarding/failover when the uplink is down or when the
-# main-table multipath would have chosen the other nexthop.
+# Critical when LAN_IF is also a WAN uplink (one-NIC / shared NIC): otherwise
+# LAN client traffic would be tagged and force-routed via that uplink's
+# table, breaking forwarding/failover when that uplink is down.
 iptables -t mangle -A MULTIPATH_MARK -i "$LAN_IF" -s "$LAN_NET" -j RETURN
 
-# Mark NEW traffic incoming on each WAN uplink so the reply uses the matching
-# routing table. The LAN bypass above already handled same-NIC LAN traffic,
-# so we no longer need the (asymmetric) `! -s $LAN_NET` filter here.
+# Mark NEW connections arriving on each WAN uplink so replies leave through
+# the same uplink (via the fwmark rules below).
 if [ "$HAS_IF1" -eq 1 ]; then
-    iptables -t mangle -A MULTIPATH_MARK -i "$IF1" -m conntrack --ctstate NEW -j MARK --set-mark $MARK1
+    iptables -t mangle -A MULTIPATH_MARK -i "$IF1" -m conntrack --ctstate NEW -j MARK --set-mark "$MARK1"
 fi
 if [ "$HAS_IF2" -eq 1 ]; then
-    iptables -t mangle -A MULTIPATH_MARK -i "$IF2" -m conntrack --ctstate NEW -j MARK --set-mark $MARK2
+    iptables -t mangle -A MULTIPATH_MARK -i "$IF2" -m conntrack --ctstate NEW -j MARK --set-mark "$MARK2"
 fi
 iptables -t mangle -A MULTIPATH_MARK -m mark ! --mark 0 -j CONNMARK --save-mark
-iptables -t mangle -A MULTIPATH_MARK -m mark --mark $MARK1 -j ACCEPT
+# WAN-originated flows are done here; ACCEPT also keeps them out of TProxy.
+iptables -t mangle -A MULTIPATH_MARK -m mark --mark "$MARK1" -j ACCEPT
 if [ "$HAS_IF2" -eq 1 ]; then
-    iptables -t mangle -A MULTIPATH_MARK -m mark --mark $MARK2 -j ACCEPT
+    iptables -t mangle -A MULTIPATH_MARK -m mark --mark "$MARK2" -j ACCEPT
 fi
 
-# Insert at position 1
-iptables -t mangle -D PREROUTING -j MULTIPATH_MARK 2>/dev/null || true
+while iptables -t mangle -D PREROUTING -j MULTIPATH_MARK 2>/dev/null; do :; done
 iptables -t mangle -I PREROUTING 1 -j MULTIPATH_MARK
 
-# Locally-originated traffic also needs the saved connmark restored so that
-# the router's own replies to WAN-incoming connections use the same uplink
-# the request came in on. Without this, an inbound flow on (say) IF2 could
-# be answered through IF1 and dropped by upstream RPF -- a failure mode that
-# is especially visible when LAN and WAN share a NIC and the kernel has
-# multiple default-route nexthops to choose from.
-iptables -t mangle -D OUTPUT -j CONNMARK --restore-mark 2>/dev/null || true
+# Restore the connmark for locally generated packets too, so the router's own
+# replies to WAN-inbound connections leave via the uplink they arrived on
+# (otherwise upstream RPF may drop them).
+while iptables -t mangle -D OUTPUT -j CONNMARK --restore-mark 2>/dev/null; do :; done
 iptables -t mangle -A OUTPUT -j CONNMARK --restore-mark
 
-# Add ip rules for the marks
-ip rule del fwmark $MARK1 table $TABLE1 2>/dev/null || true
-ip rule del fwmark $MARK2 table $TABLE2 2>/dev/null || true
-ip rule add fwmark $MARK1 table $TABLE1 priority $PRIO_MARK1
+while ip rule del priority "$PRIO_MARK1" 2>/dev/null; do :; done
+while ip rule del priority "$PRIO_MARK2" 2>/dev/null; do :; done
+ip rule add fwmark "$MARK1" table "$TABLE1" priority "$PRIO_MARK1"
 if [ "$HAS_IF2" -eq 1 ]; then
-    ip rule add fwmark $MARK2 table $TABLE2 priority $PRIO_MARK2
+    ip rule add fwmark "$MARK2" table "$TABLE2" priority "$PRIO_MARK2"
 fi
 
-# Update main routing table
+# --- Main routing table ----------------------------------------------------
 log_info "Updating main routing table..."
-# Only remove default routes that egress through $IF1 / $IF2 (or a multipath
-# whose nexthops include them). Any default route via an interface we do NOT
-# manage (e.g. a third / temporary uplink the operator added by hand) is
-# preserved on purpose, so this script never breaks unrelated NICs.
-_managed_ifaces_regex="$IF1"
-[ "$HAS_SECONDARY_UPLINK" -eq 1 ] && [ -n "${IF2:-}" ] && _managed_ifaces_regex="$_managed_ifaces_regex|$IF2"
-while IFS= read -r _def; do
-    [ -z "$_def" ] && continue
-    # Match either "default ... dev <ourif>" or "nexthop ... dev <ourif>".
-    if echo "$_def" | grep -qE "(^|[[:space:]])dev[[:space:]]+(${_managed_ifaces_regex})([[:space:]]|$)"; then
-        # shellcheck disable=SC2086
-        ip route del $_def 2>/dev/null || true
+# Only remove default routes that egress through $IF1 / $IF2 (directly or as
+# a multipath nexthop); defaults via unmanaged NICs are preserved on purpose.
+MANAGED_RE="${IF1//./\\.}"
+[ "$IF2_CONFIGURED" -eq 1 ] && MANAGED_RE+="|${IF2//./\\.}"
+MANAGED_DEV_RE="(^|[[:space:]])dev[[:space:]]+(${MANAGED_RE})([[:space:]]|$)"
+METRIC_RE="metric[[:space:]]+([0-9]+)"
+DEV_RE="dev[[:space:]]+([^[:space:]]+)"
+
+# `ip -o` folds multipath nexthops onto one line. Delete by a minimal
+# selector (prefix + dev + metric) since the full line is not valid input.
+while IFS= read -r route; do
+    [[ $route =~ $MANAGED_DEV_RE ]] || continue
+    del_spec=(default)
+    if [[ $route != *nexthop* && $route =~ $DEV_RE ]]; then
+        del_spec+=(dev "${BASH_REMATCH[1]}")
     fi
-done < <(ip route show default 2>/dev/null)
-unset _managed_ifaces_regex _def
-# Ensure main table has routes to gateways (needed for nexthop)
+    if [[ $route =~ $METRIC_RE ]]; then
+        del_spec+=(metric "${BASH_REMATCH[1]}")
+    fi
+    ip route del "${del_spec[@]}" 2>/dev/null || true
+done < <(ip -o -4 route show default 2>/dev/null || true)
+
+# Host routes to the gateways, required by the nexthop entries below.
 if [ "$HAS_IF1" -eq 1 ]; then
-    ip route replace $GW1 dev $IF1 2>/dev/null || true
+    ip route replace "$GW1" dev "$IF1" 2>/dev/null || true
 fi
 if [ "$HAS_IF2" -eq 1 ]; then
-    ip route replace $GW2 dev $IF2 2>/dev/null || true
+    ip route replace "$GW2" dev "$IF2" 2>/dev/null || true
 fi
 
-# Multipath egress mode selection. Only takes effect when BOTH uplinks are
-# UP; in single-uplink scenarios the lone available uplink is always used.
+# MULTIPATH_MODE only matters when BOTH uplinks are UP; otherwise the lone
+# healthy uplink is used. `replace` keeps re-runs idempotent.
 MODE="${MULTIPATH_MODE:-balance}"
-PRIMARY="${PRIMARY_IF:-IF1}"
-
-log_info "Adding default route (mode: $MODE)..."
+log_info "Installing default route (mode: $MODE)..."
 if [ "$IF1_UP" -eq 1 ] && [ "$IF2_UP" -eq 1 ]; then
     case "$MODE" in
         failover)
-            if [ "$PRIMARY" = "IF2" ]; then
+            if [ "${PRIMARY_IF:-IF1}" = "IF2" ]; then
                 log_info "Failover mode: primary=$IF2 (backup=$IF1)"
-                ip route add default via $GW2 dev $IF2 src $IP2
+                ip route replace default via "$GW2" dev "$IF2" src "$IP2"
             else
                 log_info "Failover mode: primary=$IF1 (backup=$IF2)"
-                ip route add default via $GW1 dev $IF1 src $IP1
+                ip route replace default via "$GW1" dev "$IF1" src "$IP1"
             fi
             ;;
-        balance|*)
-            [ "$MODE" != "balance" ] && log_warn "Unknown MULTIPATH_MODE='$MODE', falling back to balance."
-            ip route add default scope global \
-                nexthop via $GW1 dev $IF1 weight $WEIGHT1 \
-                nexthop via $GW2 dev $IF2 weight $WEIGHT2
+        *)
+            if [ "$MODE" != "balance" ]; then
+                log_warn "Unknown MULTIPATH_MODE='$MODE', falling back to balance."
+            fi
+            ip route replace default scope global \
+                nexthop via "$GW1" dev "$IF1" weight "$WEIGHT1" \
+                nexthop via "$GW2" dev "$IF2" weight "$WEIGHT2"
             ;;
     esac
 elif [ "$IF1_UP" -eq 1 ]; then
-    ip route add default via $GW1 dev $IF1 src $IP1
+    ip route replace default via "$GW1" dev "$IF1" src "$IP1"
 elif [ "$IF2_UP" -eq 1 ]; then
-    ip route add default via $GW2 dev $IF2 src $IP2
+    ip route replace default via "$GW2" dev "$IF2" src "$IP2"
+elif [ "$HAS_IF1" -eq 1 ]; then
+    # Probes can fail for reasons unrelated to the uplink (e.g. ICMP and the
+    # probe targets both filtered); keep a route rather than black-holing.
+    log_warn "No uplink passed the connectivity check; keeping default route via $IF1."
+    ip route replace default via "$GW1" dev "$IF1" src "$IP1"
+elif [ "$HAS_IF2" -eq 1 ]; then
+    log_warn "No uplink passed the connectivity check; keeping default route via $IF2."
+    ip route replace default via "$GW2" dev "$IF2" src "$IP2"
 fi
 
-# Enable IP Forwarding explicitly
 sysctl -w net.ipv4.ip_forward=1 >/dev/null 2>&1 || log_warn "Failed to enable IP forwarding via sysctl"
 
-# NAT
+# --- NAT ---------------------------------------------------------------------
 log_info "Configuring NAT..."
-if [ "$HAS_IF1" -eq 1 ]; then
-    # Clean up any existing rules to avoid duplicates
-    while iptables -t nat -D POSTROUTING -o $IF1 -j MASQUERADE 2>/dev/null; do :; done
-    iptables -t nat -A POSTROUTING -o $IF1 -j MASQUERADE
-fi
-if [ "$HAS_IF2" -eq 1 ]; then
-    while iptables -t nat -D POSTROUTING -o $IF2 -j MASQUERADE 2>/dev/null; do :; done
-    iptables -t nat -A POSTROUTING -o $IF2 -j MASQUERADE
-fi
+ACTIVE_UPLINKS=()
+[ "$HAS_IF1" -eq 1 ] && ACTIVE_UPLINKS+=("$IF1")
+[ "$HAS_IF2" -eq 1 ] && ACTIVE_UPLINKS+=("$IF2")
+for iface in "${ACTIVE_UPLINKS[@]}"; do
+    while iptables -t nat -D POSTROUTING -o "$iface" -j MASQUERADE 2>/dev/null; do :; done
+    iptables -t nat -A POSTROUTING -o "$iface" -j MASQUERADE
+done
 
-# --- Tethering / Hotspot detection bypass ---------------------------------
-# Normalize IPv4 TTL / IPv6 Hop-Limit on every WAN egress so carriers cannot
-# fingerprint forwarded (tethered) traffic by its decremented TTL. Cleared
-# and re-applied on every run so toggling TTL_BYPASS_ENABLED in config is
-# picked up by the next setup/monitor cycle.
+# --- Tethering / hotspot detection bypass ----------------------------------
+# Re-applied on every run so TTL_BYPASS_* changes take effect on the next
+# setup/monitor cycle.
 log_info "Applying TTL/Hop-Limit bypass on active uplinks..."
-[ "$HAS_IF1" -eq 1 ] && apply_ttl_bypass "$IF1"
-[ "$HAS_IF2" -eq 1 ] && apply_ttl_bypass "$IF2"
+for iface in "${ACTIVE_UPLINKS[@]}"; do
+    apply_ttl_bypass "$iface"
+done
 
-ip route flush cache
 log_info "Multipath routing configured successfully"
 
-# Update state file for monitor-uplink.sh
-if [ -n "$UPLINK_STATE_FILE" ]; then
-    if [ "$IF1_UP" -eq 1 ] && [ "$IF2_UP" -eq 1 ]; then
-        echo "BOTH" > "$UPLINK_STATE_FILE"
-    elif [ "$IF1_UP" -eq 1 ]; then
-        echo "IF1_ONLY" > "$UPLINK_STATE_FILE"
-    elif [ "$IF2_UP" -eq 1 ]; then
-        echo "IF2_ONLY" > "$UPLINK_STATE_FILE"
-    else
-        echo "NONE" > "$UPLINK_STATE_FILE"
-    fi
+# Persist the uplink state so monitor-uplink.sh can detect transitions.
+if [ -n "${UPLINK_STATE_FILE:-}" ]; then
+    uplink_state "$IF1_UP" "$IF2_UP" >"$UPLINK_STATE_FILE"
     log_info "Updated uplink state to: $(cat "$UPLINK_STATE_FILE")"
 fi
