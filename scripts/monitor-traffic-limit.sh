@@ -13,6 +13,10 @@
 # The alert script (if executable) is called as:
 #   <alert_script> <WARNING|BLOCK> <interface> <usage_gb> <limit_gb>
 #
+# Caveat: the block only covers *forwarded* traffic (FORWARD chain). Flows
+# terminated by a local proxy (e.g. Mihomo via TProxy) leave from the router
+# itself and are not blocked; cap those in the proxy instead.
+#
 # This source code is licensed under the MIT License,
 # which is located in the LICENSE file in the source tree's root directory.
 #
@@ -20,7 +24,7 @@
 # Author: mingcheng <mingcheng@apache.org>
 #
 # Modified By: mingcheng <mingcheng@apache.org>
-# Last Modified: 2026-10-05 10:00:00
+# Last Modified: 2026-10-06 19:30:00
 ##
 
 set -u
@@ -51,6 +55,11 @@ fi
 
 if ! [[ $LIMIT_GB =~ ^[0-9]+$ ]] || ! [[ $WARNING_PERCENT =~ ^[0-9]+$ ]]; then
     log_error "limit_gb and warning_percent must be non-negative integers."
+    exit 1
+fi
+
+if [ "$(id -u)" -ne 0 ]; then
+    log_error "This script must be run as root."
     exit 1
 fi
 
@@ -107,17 +116,36 @@ get_vnstat_bytes() {
 # the builtin FORWARD chain so they preempt the jump to DOCKER-USER. Once the
 # cap is hit we want to stop ALL forwarded traffic for that uplink,
 # including container egress.
+#
+# Idempotent (-C before -I), so it is called on every run while over the cap:
+# iptables rules do not survive a reboot, but the BLOCKED state does.
+# Usage: apply_block <iptables|ip6tables>
+apply_block() {
+    local cmd=$1 dir rc=0
+    for dir in -i -o; do
+        "$cmd" -C FORWARD "$dir" "$IFACE" -j DROP 2>/dev/null \
+            || "$cmd" -I FORWARD "$dir" "$IFACE" -j DROP || rc=1
+    done
+    return "$rc"
+}
+
 block_interface() {
-    log_info "Blocking internet access for $IFACE..."
-    iptables -C FORWARD -i "$IFACE" -j DROP 2>/dev/null || iptables -I FORWARD -i "$IFACE" -j DROP
-    iptables -C FORWARD -o "$IFACE" -j DROP 2>/dev/null || iptables -I FORWARD -o "$IFACE" -j DROP
-    run_alert "BLOCK"
+    apply_block iptables || log_error "Failed to install IPv4 block rules for $IFACE."
+    # IPv6 is best-effort: skipped when ip6tables is absent or IPv6 is
+    # disabled on the host (e.g. ipv6.disable=1).
+    if command -v ip6tables >/dev/null 2>&1 && [ -d /proc/sys/net/ipv6 ]; then
+        apply_block ip6tables 2>/dev/null || log_warn "Failed to install IPv6 block rules for $IFACE."
+    fi
 }
 
 unblock_interface() {
     log_info "Unblocking internet access for $IFACE..."
-    while iptables -D FORWARD -i "$IFACE" -j DROP 2>/dev/null; do :; done
-    while iptables -D FORWARD -o "$IFACE" -j DROP 2>/dev/null; do :; done
+    local cmd
+    for cmd in iptables ip6tables; do
+        command -v "$cmd" >/dev/null 2>&1 || continue
+        while "$cmd" -D FORWARD -i "$IFACE" -j DROP 2>/dev/null; do :; done
+        while "$cmd" -D FORWARD -o "$IFACE" -j DROP 2>/dev/null; do :; done
+    done
 }
 
 send_warning() {
@@ -182,13 +210,14 @@ LAST_BYTES="$CURRENT_BYTES"
 
 CURRENT_USAGE_GB=$(awk -v b="$ACCUMULATED_BYTES" -v g="$BYTES_PER_GB" 'BEGIN { printf "%.2f", b / g }')
 LIMIT_BYTES=$((LIMIT_GB * BYTES_PER_GB))
-WARNING_BYTES=$((LIMIT_BYTES / 100 * WARNING_PERCENT))
+WARNING_BYTES=$((LIMIT_BYTES * WARNING_PERCENT / 100))
 
 if [ "$ACCUMULATED_BYTES" -ge "$LIMIT_BYTES" ]; then
+    block_interface
     if [ "$BLOCKED_STATUS" -eq 0 ]; then
-        log_warn "Limit exceeded ($CURRENT_USAGE_GB GB >= $LIMIT_GB GB). Initiating block."
-        block_interface
+        log_warn "Limit exceeded ($CURRENT_USAGE_GB GB >= $LIMIT_GB GB). Blocked forwarding on $IFACE."
         BLOCKED_STATUS=1
+        run_alert "BLOCK"
     fi
 else
     if [ "$ACCUMULATED_BYTES" -ge "$WARNING_BYTES" ] && [ "$WARNING_SENT" -eq 0 ]; then

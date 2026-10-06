@@ -11,12 +11,17 @@
 # File Created: 2025-12-27 22:40:47
 #
 # Modified By: mingcheng <mingcheng@apache.org>
-# Last Modified: 2026-10-05 10:00:00
+# Last Modified: 2026-10-06 19:30:00
 ##
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=utils.sh
 source "$SCRIPT_DIR/utils.sh"
+
+if [ "$(id -u)" -ne 0 ]; then
+    log_error "This script must be run as root."
+    exit 1
+fi
 
 STATE_FILE="$UPLINK_STATE_FILE"
 
@@ -83,9 +88,11 @@ NEW_STATE=$(uplink_state "$STATUS1" "$STATUS2")
 OLD_STATE=""
 [ -f "$STATE_FILE" ] && OLD_STATE=$(cat "$STATE_FILE")
 
-if [ "$NEW_STATE" != "$OLD_STATE" ]; then
-    [ -z "$RESTART_REASON" ] && RESTART_REASON="state ${OLD_STATE:-<none>} -> $NEW_STATE"
-    echo "$NEW_STATE" >"$STATE_FILE"
+# The state file is (re)written by setup-multipath.sh only after it applies
+# the new routing, so a failed restart is retried on the next run instead of
+# being masked by an already-updated state.
+if [ "$NEW_STATE" != "$OLD_STATE" ] && [ -z "$RESTART_REASON" ]; then
+    RESTART_REASON="state ${OLD_STATE:-<none>} -> $NEW_STATE"
 fi
 
 # 3. Single restart point — handles both restore and state-change cases.

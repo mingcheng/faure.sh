@@ -5,7 +5,7 @@
 #
 # This script parses every *.conf file under the project's sysctl.d/ directory,
 # extracts each `key = value` pair, then compares it with the runtime value
-# reported by `sysctl`. A summary of PASS/FAIL/MISSING entries is printed at
+# read from /proc/sys. A summary of PASS/FAIL/MISSING entries is printed at
 # the end, and the exit code is non-zero when any mismatch is detected.
 #
 # This source code is licensed under the MIT License,
@@ -16,27 +16,21 @@
 # File Created: 2026-05-09 16:48:36
 #
 # Modified By: mingcheng <mingcheng@apache.org>
-# Last Modified: 2026-10-05 10:00:00
+# Last Modified: 2026-10-06 19:30:00
 ##
 
 set -u
 
-# Colors
-GREEN='\033[0;32m'
-RED='\033[0;31m'
-YELLOW='\033[1;33m'
-CYAN='\033[0;36m'
-NC='\033[0m'
-
-log_pass() { echo -e "${GREEN}[PASS]${NC} $1"; }
-log_fail() { echo -e "${RED}[FAIL]${NC} $1"; }
-log_warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
-log_info() { echo -e "       $1"; }
-log_head() { echo -e "${CYAN}$1${NC}"; }
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=utils.sh
+source "$SCRIPT_DIR/utils.sh"
+use_report_logging
 
 # Locate sysctl.d directory relative to this script
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SYSCTL_DIR="${SYSCTL_DIR:-$SCRIPT_DIR/../sysctl.d}"
+
+# Other places systemd-sysctl reads; used to explain mismatches.
+SYSTEM_SYSCTL_PATHS=(/etc/sysctl.d /run/sysctl.d /usr/local/lib/sysctl.d /usr/lib/sysctl.d /etc/sysctl.conf)
 
 if [ ! -d "$SYSCTL_DIR" ]; then
     log_fail "sysctl.d directory not found: $SYSCTL_DIR"
@@ -61,19 +55,34 @@ normalize() {
     echo "${words[*]}"
 }
 
-check_param() {
-    local key="$1"
-    local expected="$2"
-    local file="$3"
+# Map a sysctl key to its /proc/sys path. Per sysctl.d(5), a key containing
+# '/' already uses '/' as separator; otherwise '.' separates components.
+# Usage: proc_path <key>
+proc_path() {
+    local key=$1
+    [[ $key == */* ]] || key=${key//./\/}
+    echo "/proc/sys/$key"
+}
 
-    local actual
-    if ! actual=$(sysctl -n "$key" 2>/dev/null); then
+# Print other system sysctl files that also set <key> (and may override us).
+# Usage: other_sources <key> <our_basename>
+other_sources() {
+    local key_re="^[[:space:]]*-?${1//./\\.}[[:space:]]*="
+    grep -rlsE -e "$key_re" "${SYSTEM_SYSCTL_PATHS[@]}" 2>/dev/null \
+        | grep -v -e "/$2\$" || true
+}
+
+check_param() {
+    local key="$1" expected="$2" file="$3"
+    local path actual exp_norm act_norm others
+
+    path=$(proc_path "$key")
+    if [ ! -r "$path" ] || ! actual=$(<"$path") 2>/dev/null; then
         log_warn "$key (from $file): not available on this kernel"
         MISSING_COUNT=$((MISSING_COUNT + 1))
         return
     fi
 
-    local exp_norm act_norm
     exp_norm=$(normalize "$expected")
     act_norm=$(normalize "$actual")
 
@@ -85,6 +94,10 @@ check_param() {
         log_info "expected: $exp_norm"
         log_info "actual  : $act_norm"
         log_info "source  : $file"
+        others=$(other_sources "$key" "$file")
+        if [ -n "$others" ]; then
+            log_info "also set in: ${others//$'\n'/ }"
+        fi
         FAIL_COUNT=$((FAIL_COUNT + 1))
         FAIL_DETAILS+=("$key (expected '$exp_norm', got '$act_norm')")
     fi
@@ -106,33 +119,25 @@ declare -A EXPECTED
 declare -A SOURCE
 
 for conf in "${CONF_FILES[@]}"; do
+    conf_name=$(basename "$conf")
     while IFS= read -r raw_line || [ -n "$raw_line" ]; do
-        # Strip leading whitespace
-        line="${raw_line#"${raw_line%%[![:space:]]*}"}"
-        # Skip blanks, comments (# or ;)
-        [ -z "$line" ] && continue
+        line=$(normalize "$raw_line")
+        # Skip blanks, comments (# or ;) and lines without '='.
         case "$line" in
-            \#* | \;*) continue ;;
-        esac
-        # Must contain '='
-        case "$line" in
+            '' | \#* | \;*) continue ;;
             *=*) ;;
             *) continue ;;
         esac
 
-        key="${line%%=*}"
-        value="${line#*=}"
-        # Trim
-        key=$(normalize "$key")
-        value=$(normalize "$value")
-        # Strip trailing inline comments from value (sysctl does not support them, but be defensive)
-        value="${value%%#*}"
-        value=$(normalize "$value")
+        key=$(normalize "${line%%=*}")
+        # A leading '-' only tells sysctl to ignore errors for this key.
+        key="${key#-}"
+        value=$(normalize "${line#*=}")
 
         [ -z "$key" ] && continue
 
         EXPECTED["$key"]="$value"
-        SOURCE["$key"]="$(basename "$conf")"
+        SOURCE["$key"]="$conf_name"
     done <"$conf"
 done
 
@@ -154,11 +159,11 @@ echo ""
 log_head "--- Summary ---"
 TOTAL=${#SORTED_KEYS[@]}
 echo "Total parameters : $TOTAL"
-echo -e "${GREEN}Pass${NC}             : $PASS_COUNT"
-echo -e "${RED}Fail${NC}             : $FAIL_COUNT"
-echo -e "${YELLOW}Missing/Unknown${NC}  : $MISSING_COUNT"
+echo "Pass             : $PASS_COUNT"
+echo "Fail             : $FAIL_COUNT"
+echo "Missing/Unknown  : $MISSING_COUNT"
 
-if [ $FAIL_COUNT -gt 0 ]; then
+if [ "$FAIL_COUNT" -gt 0 ]; then
     echo ""
     log_head "Mismatched parameters:"
     for d in "${FAIL_DETAILS[@]}"; do
@@ -168,9 +173,10 @@ fi
 
 echo ""
 echo "=============================================="
-if [ $FAIL_COUNT -gt 0 ]; then
+if [ "$FAIL_COUNT" -gt 0 ]; then
     log_fail "Kernel verification FAILED"
-    echo "Hint: run 'sudo sysctl --system' to reload sysctl.d configurations."
+    echo "Hint: run 'sudo sysctl --system' to reload sysctl.d configurations;"
+    echo "      keys listed under 'also set in' are overridden by another file."
     exit 1
 fi
 

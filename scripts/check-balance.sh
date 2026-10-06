@@ -9,7 +9,7 @@
 # File Created: 2025-12-27 22:40:47
 #
 # Modified By: mingcheng <mingcheng@apache.org>
-# Last Modified: 2026-10-05 10:00:00
+# Last Modified: 2026-10-06 19:30:00
 ##
 #
 # Sample TX/RX counters on two interfaces for N seconds and print how the
@@ -26,26 +26,26 @@ IFACE2="${2:-${IF2:-}}"
 DURATION="${3:-10}"
 
 if [ $# -lt 2 ] && ! secondary_uplink_enabled; then
-	echo "Single-uplink mode: no secondary interface to compare."
-	echo "Tip: pass two interface names explicitly to compare traffic counters."
-	exit 0
+    echo "Single-uplink mode: no secondary interface to compare."
+    echo "Tip: pass two interface names explicitly to compare traffic counters."
+    exit 0
 fi
 
 if [ -z "$IFACE2" ] || [ "$IFACE2" = "$IFACE1" ]; then
-	echo "Error: two distinct interfaces are required for balance comparison."
-	exit 1
+    echo "Error: two distinct interfaces are required for balance comparison."
+    exit 1
 fi
 
 if ! [[ $DURATION =~ ^[1-9][0-9]*$ ]]; then
-	echo "Error: duration must be a positive integer (seconds)."
-	exit 1
+    echo "Error: duration must be a positive integer (seconds)."
+    exit 1
 fi
 
 for iface in "$IFACE1" "$IFACE2"; do
-	if [ ! -d "/sys/class/net/$iface" ]; then
-		echo "Error: Interface $iface not found."
-		exit 1
-	fi
+    if [ ! -d "/sys/class/net/$iface" ]; then
+        echo "Error: Interface $iface not found."
+        exit 1
+    fi
 done
 
 echo "========================================"
@@ -71,7 +71,7 @@ I1_RX_DIFF=$(($(get_counter "$IFACE1" rx_bytes) - I1_RX_START))
 I2_RX_DIFF=$(($(get_counter "$IFACE2" rx_bytes) - I2_RX_START))
 
 human_readable() {
-	awk -v b="${1:-0}" 'BEGIN {
+    awk -v b="${1:-0}" 'BEGIN {
         split("B KB MB GB TB", units);
         u = 1;
         while (b >= 1024 && u < 5) { b /= 1024; u++ }
@@ -81,12 +81,12 @@ human_readable() {
 
 # Usage: print_split <title> <bytes_iface1> <bytes_iface2>
 print_split() {
-	local total=$(($2 + $3))
-	[ "$total" -gt 0 ] || return 0
-	echo "$1 Distribution:"
-	awk -v a="$2" -v t="$total" -v n="$IFACE1" 'BEGIN { printf "  %s: %.1f%%\n", n, a * 100 / t }'
-	awk -v a="$3" -v t="$total" -v n="$IFACE2" 'BEGIN { printf "  %s: %.1f%%\n", n, a * 100 / t }'
-	echo ""
+    local total=$(($2 + $3))
+    [ "$total" -gt 0 ] || return 0
+    echo "$1 Distribution:"
+    awk -v a="$2" -v t="$total" -v n="$IFACE1" 'BEGIN { printf "  %s: %.1f%%\n", n, a * 100 / t }'
+    awk -v a="$3" -v t="$total" -v n="$IFACE2" 'BEGIN { printf "  %s: %.1f%%\n", n, a * 100 / t }'
+    echo ""
 }
 
 echo "=== Traffic in last $DURATION seconds ==="

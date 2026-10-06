@@ -11,7 +11,7 @@
 # File Created: 2025-12-27 23:13:18
 #
 # Modified By: mingcheng <mingcheng@apache.org>
-# Last Modified: 2026-10-05 10:00:00
+# Last Modified: 2026-10-06 19:30:00
 ##
 
 set -o errexit -o nounset -o pipefail
@@ -25,14 +25,14 @@ log_info "Configuring multipath routing..."
 # IF2 is "configured" when set and distinct from IF1; it is only *used* when
 # it also has an IPv4 address (see secondary_uplink_enabled).
 IF2_CONFIGURED=0
-if [ -n "${IF2:-}" ] && [ "$IF2" != "$IF1" ]; then
+CONFIGURED_UPLINKS=("$IF1")
+if secondary_uplink_configured; then
     IF2_CONFIGURED=1
+    CONFIGURED_UPLINKS+=("$IF2")
 fi
 
 # Wait up to 60s for DHCP so a slow boot does not abort the setup.
-WAIT_IFACES=("$IF1")
-[ "$IF2_CONFIGURED" -eq 1 ] && WAIT_IFACES+=("$IF2")
-wait_for_ip 30 2 "${WAIT_IFACES[@]}" || true
+wait_for_ip 30 2 "${CONFIGURED_UPLINKS[@]}" || true
 
 # --- Uplink discovery ------------------------------------------------------
 HAS_IF1=0
@@ -264,20 +264,20 @@ fi
 sysctl -w net.ipv4.ip_forward=1 >/dev/null 2>&1 || log_warn "Failed to enable IP forwarding via sysctl"
 
 # --- NAT ---------------------------------------------------------------------
+# Covers every configured uplink (not just the active ones) so a secondary
+# uplink that comes back between monitor runs is masqueraded right away.
 log_info "Configuring NAT..."
-ACTIVE_UPLINKS=()
-[ "$HAS_IF1" -eq 1 ] && ACTIVE_UPLINKS+=("$IF1")
-[ "$HAS_IF2" -eq 1 ] && ACTIVE_UPLINKS+=("$IF2")
-for iface in "${ACTIVE_UPLINKS[@]}"; do
+for iface in "${CONFIGURED_UPLINKS[@]}"; do
     while iptables -t nat -D POSTROUTING -o "$iface" -j MASQUERADE 2>/dev/null; do :; done
     iptables -t nat -A POSTROUTING -o "$iface" -j MASQUERADE
 done
 
 # --- Tethering / hotspot detection bypass ----------------------------------
 # Re-applied on every run so TTL_BYPASS_* changes take effect on the next
-# setup/monitor cycle.
-log_info "Applying TTL/Hop-Limit bypass on active uplinks..."
-for iface in "${ACTIVE_UPLINKS[@]}"; do
+# setup/monitor cycle; inactive uplinks are included so disabling the
+# feature also clears them.
+log_info "Applying TTL/Hop-Limit bypass on configured uplinks..."
+for iface in "${CONFIGURED_UPLINKS[@]}"; do
     apply_ttl_bypass "$iface"
 done
 

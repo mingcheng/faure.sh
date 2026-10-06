@@ -15,7 +15,7 @@
 # File Created: 2025-12-28 16:31:58
 #
 # Modified By: mingcheng <mingcheng@apache.org>
-# Last Modified: 2026-10-05 10:00:00
+# Last Modified: 2026-10-06 19:30:00
 ##
 
 # Exit immediately if a command exits with a non-zero status, if an undefined variable is used, or if any command in a pipeline fails.
@@ -35,7 +35,7 @@ log_info() {
 }
 
 log_error() {
-    echo -e "${RED}[ERROR]${NC} $1"
+    echo -e "${RED}[ERROR]${NC} $1" >&2
 }
 
 # Check if running as root
@@ -107,6 +107,17 @@ if [ ! -f /etc/faure/config.sh ]; then
 # #   TTL_BYPASS_VALUE=64 mimics direct phone egress.
 # export TTL_BYPASS_ENABLED=1
 # export TTL_BYPASS_VALUE=65
+#
+# # Last-resort gateway for IF1 when route detection fails ("" disables).
+# export IF1_GW_FALLBACK="172.16.1.1"
+#
+# # Advanced: change only if they clash with other routing/firewall setups.
+# export TABLE1=100 TABLE2=101 TPROXY_TABLE=200
+# export MARK1=0x100 MARK2=0x200 TPROXY_MARK=0x1
+# export PRIO_MARK1=90 PRIO_MARK2=91 PRIO_TPROXY=99 PRIO_SRC1=100 PRIO_SRC2=101
+# export CHAIN_NAME="MIHOMO_TPROXY"
+# export TPROXY_WAIT_INTERVAL=2
+# export UPLINK_STATE_FILE="/run/uplink_status"
 EOF
     chmod 644 /etc/faure/config.sh
     log_info "Created /etc/faure/config.sh (edit to override defaults)."
@@ -120,6 +131,14 @@ if [ -d "$PROJECT_DIR/sysctl.d" ]; then
     install -m 0644 -t /etc/sysctl.d/ "$PROJECT_DIR"/sysctl.d/*.conf
 else
     log_error "sysctl.d directory not found in $PROJECT_DIR"
+fi
+
+# Modules that must be loaded before systemd-sysctl applies the files above.
+log_info "Installing modules-load.d configuration..."
+if [ -d "$PROJECT_DIR/modules-load.d" ]; then
+    install -m 0644 -D -t /etc/modules-load.d/ "$PROJECT_DIR"/modules-load.d/*.conf
+else
+    log_error "modules-load.d directory not found in $PROJECT_DIR"
 fi
 
 # --- Systemd Configuration ---
@@ -167,10 +186,13 @@ log_info ""
 log_info "Next steps:"
 log_info "  1. Review and edit /etc/faure/config.sh to match your environment."
 log_info "  2. Configure netplan in /etc/netplan/ and run: netplan apply"
-log_info "  3. Start services manually for the first time:"
+log_info "  3. Apply kernel settings (or reboot):"
+log_info "       systemctl restart systemd-modules-load.service"
+log_info "       sysctl --system"
+log_info "  4. Start services manually for the first time:"
 log_info "       systemctl start multipath-routing.service"
 log_info "       systemctl start tproxy-routing.service"
 log_info "       systemctl start monitor-uplink.timer"
-log_info "  4. Verify the setup:"
+log_info "  5. Verify the setup:"
 log_info "       sudo $PROJECT_DIR/scripts/verify-network.sh"
 log_info "       sudo $PROJECT_DIR/scripts/verify-kernel.sh"

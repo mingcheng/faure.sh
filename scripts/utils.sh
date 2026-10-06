@@ -11,31 +11,48 @@
 # File Created: 2025-12-31 10:33:40
 #
 # Modified By: mingcheng <mingcheng@apache.org>
-# Last Modified: 2026-10-05 10:00:00
+# Last Modified: 2026-10-06 19:30:00
 ##
 
 # Source configuration (defaults + optional /etc/faure override).
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=config.sh
 source "$SCRIPT_DIR/config.sh"
- 
+
 # --- Logging Functions ---
 
-COLOR_GREEN='\033[0;32m'
-COLOR_YELLOW='\033[1;33m'
-COLOR_RED='\033[0;31m'
-COLOR_NC='\033[0m'
+# Colorize only on a terminal (and honor NO_COLOR) so the systemd journal does
+# not fill up with raw escape sequences.
+if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then
+    COLOR_GREEN='\033[0;32m'
+    COLOR_YELLOW='\033[1;33m'
+    COLOR_RED='\033[0;31m'
+    COLOR_CYAN='\033[0;36m'
+    COLOR_NC='\033[0m'
+else
+    COLOR_GREEN='' COLOR_YELLOW='' COLOR_RED='' COLOR_CYAN='' COLOR_NC=''
+fi
 
-log_info() {
-    echo -e "${COLOR_GREEN}[INFO] $(date '+%Y-%m-%d %H:%M:%S')${COLOR_NC} $*"
+# Usage: _log <color> <label> <message...>
+_log() {
+    local color=$1 label=$2
+    shift 2
+    printf '%b[%s] %s%b %s\n' "$color" "$label" "$(date '+%Y-%m-%d %H:%M:%S')" "$COLOR_NC" "$*"
 }
 
-log_warn() {
-    echo -e "${COLOR_YELLOW}[WARN] $(date '+%Y-%m-%d %H:%M:%S')${COLOR_NC} $*"
-}
+log_info() { _log "$COLOR_GREEN" INFO "$@"; }
+log_warn() { _log "$COLOR_YELLOW" WARN "$@"; }
+log_error() { _log "$COLOR_RED" ERROR "$@" >&2; }
 
-log_error() {
-    echo -e "${COLOR_RED}[ERROR] $(date '+%Y-%m-%d %H:%M:%S')${COLOR_NC} $*" >&2
+# Switch to the timestamp-less [PASS]/[FAIL]/[WARN] style used by the
+# verify-*.sh reports. Call once, right after sourcing this file.
+# shellcheck disable=SC2317  # functions are defined when this is called
+use_report_logging() {
+    log_pass() { printf '%b[PASS]%b %s\n' "$COLOR_GREEN" "$COLOR_NC" "$*"; }
+    log_fail() { printf '%b[FAIL]%b %s\n' "$COLOR_RED" "$COLOR_NC" "$*"; }
+    log_warn() { printf '%b[WARN]%b %s\n' "$COLOR_YELLOW" "$COLOR_NC" "$*"; }
+    log_info() { printf '       %s\n' "$*"; }
+    log_head() { printf '%b%s%b\n' "$COLOR_CYAN" "$*" "$COLOR_NC"; }
 }
 
 # --- Network Helper Functions ---
@@ -49,13 +66,18 @@ get_ip() {
         | awk '{ split($4, a, "/"); print a[1]; exit }' || true
 }
 
-# Return success when the secondary uplink is configured as a distinct
-# interface and currently has IPv4. Setting IF2 empty, setting it to IF1, or
-# leaving the default IF2 inactive on a one-NIC host switches scripts into
-# single-uplink mode; monitor-uplink will pick IF2 up on a later run once the
-# NIC appears and receives an address.
+# Return success when IF2 is set and distinct from IF1 (it may still lack an
+# address). Setting IF2 empty or equal to IF1 selects one-NIC mode.
+secondary_uplink_configured() {
+    [ -n "${IF2:-}" ] && [ "${IF2:-}" != "${IF1:-}" ]
+}
+
+# Return success when the secondary uplink is configured AND currently has
+# IPv4. A configured but inactive IF2 (e.g. unplugged USB tether) keeps the
+# scripts in single-uplink mode; monitor-uplink picks it up on a later run
+# once the NIC appears and receives an address.
 secondary_uplink_enabled() {
-    [ -n "${IF2:-}" ] && [ "${IF2:-}" != "${IF1:-}" ] && [ -n "$(get_ip "$IF2")" ]
+    secondary_uplink_configured && [ -n "$(get_ip "$IF2")" ]
 }
 
 # Print the first on-link (scope link, not linkdown) IPv4 subnet of an iface.
@@ -171,6 +193,33 @@ uplink_state() {
     esac
 }
 
+# --- iptables helpers -------------------------------------------------------
+
+# Print the rules of <table>/<chain> (iptables -S form) matching <ERE>.
+# Prints nothing if the tool is missing or nothing matches.
+# Usage: find_rules <iptables|ip6tables> <table> <chain> <regex>
+find_rules() {
+    local cmd=$1 table=$2 chain=$3 regex=$4
+    command -v "$cmd" >/dev/null 2>&1 || return 0
+    "$cmd" -t "$table" -S "$chain" 2>/dev/null | grep -E -- "$regex" || true
+}
+
+# Delete every rule of <table>/<chain> matching <ERE>. Matching on the live
+# rule text lets cleanup remove rules created with older settings (e.g. a
+# previous LAN_IF). Rules must not contain quoted arguments with spaces.
+# Usage: delete_rules <iptables|ip6tables> <table> <chain> <regex>
+delete_rules() {
+    local cmd=$1 table=$2 chain=$3 regex=$4 line
+    local -a rule
+    # Snapshot first, then delete, so we never mutate while listing.
+    while IFS= read -r line; do
+        [ -n "$line" ] || continue
+        read -ra rule <<<"$line"
+        rule[0]="-D"
+        "$cmd" -t "$table" "${rule[@]}" 2>/dev/null || true
+    done <<<"$(find_rules "$cmd" "$table" "$chain" "$regex")"
+}
+
 # --- Tethering / Hotspot detection bypass ---------------------------------
 #
 # Rewrite the IPv4 TTL (and IPv6 Hop-Limit) of every packet leaving the
@@ -203,31 +252,23 @@ ttl_bypass_enabled() {
 # for <iface>. Prints nothing if the tool is missing or no rule matches.
 # Usage: egress_rewrite_rules <iptables|ip6tables> <TTL|HL> <iface>
 egress_rewrite_rules() {
-    local cmd=$1 target=$2 iface=$3
-    command -v "$cmd" >/dev/null 2>&1 || return 0
-    "$cmd" -t mangle -S POSTROUTING 2>/dev/null \
-        | grep -E -- "^-A POSTROUTING .*-o ${iface//./\\.} .*-j ${target}( |$)" || true
+    find_rules "$1" mangle POSTROUTING "$(egress_rewrite_regex "$2" "$3")"
+}
+
+# ERE matching the TTL/HL rewrite rules on <iface> (any value).
+# Usage: egress_rewrite_regex <TTL|HL> <iface>
+egress_rewrite_regex() {
+    printf '^-A POSTROUTING .*-o %s .*-j %s( |$)' "${2//./\\.}" "$1"
 }
 
 # Remove any TTL/HL rewrite rule installed on the given iface (all values,
 # so value changes or legacy duplicates are cleaned up too).
 # Usage: clear_ttl_bypass <iface>
 clear_ttl_bypass() {
-    local iface=${1:-} cmd target line
-    local -a rule
+    local iface=${1:-}
     [ -n "$iface" ] || return 0
-
-    for cmd in iptables ip6tables; do
-        target=TTL
-        [ "$cmd" = ip6tables ] && target=HL
-        # Snapshot first, then delete, so we never mutate while listing.
-        while IFS= read -r line; do
-            [ -n "$line" ] || continue
-            read -ra rule <<<"$line"
-            rule[0]="-D"
-            "$cmd" -t mangle "${rule[@]}" 2>/dev/null || true
-        done <<<"$(egress_rewrite_rules "$cmd" "$target" "$iface")"
-    done
+    delete_rules iptables mangle POSTROUTING "$(egress_rewrite_regex TTL "$iface")"
+    delete_rules ip6tables mangle POSTROUTING "$(egress_rewrite_regex HL "$iface")"
 }
 
 # Apply (or, if disabled, just clean up) the TTL/HL rewrite on a WAN iface.

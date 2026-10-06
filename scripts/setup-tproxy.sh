@@ -11,7 +11,7 @@
 # File Created: 2025-03-19 14:32:47
 #
 # Modified By: mingcheng <mingcheng@apache.org>
-# Last Modified: 2026-10-05 10:00:00
+# Last Modified: 2026-10-06 19:30:00
 ##
 #
 # Docker compatibility notes:
@@ -25,9 +25,7 @@
 #  * The TPROXY logic lives entirely in the mangle table, which Docker does not
 #    use, so there is no conflict with container port publishing.
 
-set -o errexit
-set -o nounset
-set -o pipefail
+set -o errexit -o nounset -o pipefail
 
 # --- Load shared configuration & utilities ---------------------------------
 # utils.sh sources config.sh (and any /etc/faure/config.sh override).
@@ -96,11 +94,15 @@ check_listeners() {
 # --- Cleanup ---------------------------------------------------------------
 # Only touches our own namespaced chain and a tightly-scoped DNS REDIRECT.
 # Docker's DOCKER / DOCKER-USER / DOCKER-ISOLATION-* chains are never flushed.
+# Rules are matched by their target / comment rather than by the current
+# LAN_IF / LAN_NET, so changing those settings leaves nothing stale behind.
+DNS_RULE_TAG="faure-tproxy-dns"
+
 cleanup_firewall() {
     log_info "Cleaning up existing TPROXY firewall rules..."
 
-    # Detach our chain from PREROUTING (loop removes accidental duplicates).
-    while iptables -t mangle -D PREROUTING -i "$LAN_IF" -s "$LAN_NET" -j "$CHAIN_NAME" 2>/dev/null; do :; done
+    # Detach our chain from PREROUTING whatever its matchers were.
+    delete_rules iptables mangle PREROUTING "-j ${CHAIN_NAME}( |$)"
     iptables -t mangle -F "$CHAIN_NAME" 2>/dev/null || true
     iptables -t mangle -X "$CHAIN_NAME" 2>/dev/null || true
 
@@ -109,6 +111,8 @@ cleanup_firewall() {
     ip route flush table "$TPROXY_TABLE" 2>/dev/null || true
 
     # NAT DNS redirect (scoped, so Docker rules are unaffected).
+    delete_rules iptables nat PREROUTING "--comment ${DNS_RULE_TAG}( |$)"
+    # Legacy untagged rules from older versions of this script.
     local proto
     for proto in udp tcp; do
         while iptables -t nat -D PREROUTING -i "$LAN_IF" -s "$LAN_NET" -p "$proto" --dport 53 \
@@ -121,11 +125,13 @@ cleanup_firewall() {
 # --- Setup -----------------------------------------------------------------
 setup_tproxy_chain() {
     log_info "Creating $CHAIN_NAME chain..."
-    iptables -t mangle -N "$CHAIN_NAME"
+    iptables -t mangle -N "$CHAIN_NAME" 2>/dev/null || true
+    iptables -t mangle -F "$CHAIN_NAME"
 
-    # Bypass local / private / multicast / broadcast destinations.
-    # 172.16.0.0/12 includes Docker's default bridge ranges, so container
-    # traffic is never hijacked by TPROXY.
+    # Bypass traffic to the router itself and to local / private / multicast
+    # / broadcast destinations. 172.16.0.0/12 includes Docker's default
+    # bridge ranges, so container traffic is never hijacked by TPROXY.
+    iptables -t mangle -A "$CHAIN_NAME" -m addrtype --dst-type LOCAL -j RETURN
     local bypass_nets=(
         0.0.0.0/8 10.0.0.0/8 127.0.0.0/8 169.254.0.0/16
         172.16.0.0/12 192.168.0.0/16 224.0.0.0/4 240.0.0.0/4
@@ -163,7 +169,7 @@ setup_dns_redirect() {
     local proto
     for proto in udp tcp; do
         iptables -t nat -A PREROUTING -i "$LAN_IF" -s "$LAN_NET" -p "$proto" --dport 53 \
-            -j REDIRECT --to-ports "$TPROXY_DNS_PORT"
+            -m comment --comment "$DNS_RULE_TAG" -j REDIRECT --to-ports "$TPROXY_DNS_PORT"
     done
 }
 

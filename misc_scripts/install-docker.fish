@@ -9,14 +9,14 @@
 # File Created: 2025-03-20 11:44:32
 #
 # Modified By: mingcheng <mingcheng@apache.org>
-# Last Modified: 2025-12-29 08:21:19
+# Last Modified: 2026-10-06 19:30:00
 ##
 
-# Colors for output
-set -l RED '\033[0;31m'
-set -l GREEN '\033[0;32m'
-set -l YELLOW '\033[1;33m'
-set -l NC '\033[0m' # No Color
+# Colors for output (global: fish functions cannot see script-local variables)
+set -g RED '\033[0;31m'
+set -g GREEN '\033[0;32m'
+set -g YELLOW '\033[1;33m'
+set -g NC '\033[0m' # No Color
 
 # Function to print colored messages
 function print_info
@@ -67,7 +67,7 @@ end
 # Remove old Docker packages if they exist
 print_info "Removing old Docker packages (if any)..."
 for pkg in docker.io docker-doc docker-compose podman-docker containerd runc
-    if dpkg -l | grep -q "^ii.*$pkg"
+    if dpkg-query -W -f '${Status}' $pkg 2>/dev/null | string match -q '*ok installed'
         print_info "Removing package: $pkg"
         apt-get remove -y $pkg
     end
@@ -79,22 +79,26 @@ apt update || handle_error "Failed to update package database"
 print_info "Installing required packages..."
 apt install -y apt-transport-https ca-certificates curl gnupg lsb-release || handle_error "Failed to install required packages"
 
+# Get system architecture, distribution (debian/ubuntu) and codename
+set -l arch (dpkg --print-architecture)
+set -l codename (lsb_release -cs)
+set -l distro (lsb_release -is | string lower)
+if not contains -- $distro debian ubuntu
+    handle_error "Unsupported distribution: $distro (expected debian or ubuntu)"
+end
+
 # Create directory for keyrings
 print_info "Setting up Docker GPG key..."
 install -m 0755 -d /etc/apt/keyrings || handle_error "Failed to create keyrings directory"
 
 # Download Docker's GPG key (using Aliyun mirror for better speed in China)
-curl -fsSL https://mirrors.aliyun.com/docker-ce/linux/debian/gpg -o /etc/apt/keyrings/docker.asc || handle_error "Failed to download Docker GPG key"
+curl -fsSL https://mirrors.aliyun.com/docker-ce/linux/$distro/gpg -o /etc/apt/keyrings/docker.asc || handle_error "Failed to download Docker GPG key"
 chmod a+r /etc/apt/keyrings/docker.asc || handle_error "Failed to set permissions on GPG key"
 
-# Get system architecture and codename
-set -l arch (dpkg --print-architecture)
-set -l codename (lsb_release -cs)
-
-print_info "Adding Docker repository for architecture: $arch, codename: $codename"
+print_info "Adding Docker repository for $distro ($codename), architecture: $arch"
 
 # Add Docker repository to sources
-echo "deb [arch=$arch signed-by=/etc/apt/keyrings/docker.asc] https://mirrors.aliyun.com/docker-ce/linux/debian $codename stable" | tee /etc/apt/sources.list.d/docker.list >/dev/null || handle_error "Failed to add Docker repository"
+echo "deb [arch=$arch signed-by=/etc/apt/keyrings/docker.asc] https://mirrors.aliyun.com/docker-ce/linux/$distro $codename stable" | tee /etc/apt/sources.list.d/docker.list >/dev/null || handle_error "Failed to add Docker repository"
 
 print_info "Updating package database with Docker repository..."
 apt update || handle_error "Failed to update package database after adding Docker repository"

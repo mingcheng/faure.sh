@@ -1,10 +1,8 @@
 [Unit]
 Description=Monitor Uplink Connectivity and Update Routing
-After=network-online.target
+After=network-online.target multipath-routing.service
+# Activated by monitor-uplink.timer only, hence no [Install] section.
 
 [Service]
 Type=oneshot
 ExecStart=/root/faure.sh/scripts/monitor-uplink.sh
-
-[Install]
-WantedBy=multi-user.target

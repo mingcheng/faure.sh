@@ -15,14 +15,14 @@ directly from the command line or from `systemd` units shipped under
 | File | Purpose |
 |------|---------|
 | [`config.sh`](config.sh) | Single source of truth for **all** tunables (interfaces, networks, route tables, fwmarks, TProxy port, etc.). Sourced by every other script via `utils.sh`. |
-| [`utils.sh`](utils.sh) | Shared logging (`log_info` / `log_warn` / `log_error`), network helpers (`get_ip`, `get_subnet`, `get_gateway`, `check_connectivity`, `wait_for_ip`, `secondary_uplink_enabled`, `uplink_state`) and the per-uplink TTL / Hop-Limit normalizer (`apply_ttl_bypass` / `clear_ttl_bypass` / `ttl_bypass_enabled` / `egress_rewrite_rules`). Sources `config.sh` automatically. |
-| [`setup-multipath.sh`](setup-multipath.sh) | Builds the dual-uplink load-balancing routing tables, policy rules, `MULTIPATH_MARK` mangle chain (CONNMARK based), `MASQUERADE` rules, and per-uplink TTL / Hop-Limit normalization. |
+| [`utils.sh`](utils.sh) | Shared logging (`log_info` / `log_warn` / `log_error`; `use_report_logging` switches the verifiers to `[PASS]` / `[FAIL]` labels; colors only on a TTY and never with `NO_COLOR`), network helpers (`get_ip`, `get_subnet`, `get_gateway`, `check_connectivity`, `wait_for_ip`, `secondary_uplink_configured`, `secondary_uplink_enabled`, `uplink_state`), iptables rule helpers (`find_rules` / `delete_rules`, matching on the live `-S` output) and the per-uplink TTL / Hop-Limit normalizer (`apply_ttl_bypass` / `clear_ttl_bypass` / `ttl_bypass_enabled` / `egress_rewrite_rules`). Sources `config.sh` automatically. |
+| [`setup-multipath.sh`](setup-multipath.sh) | Builds the dual-uplink load-balancing routing tables, policy rules, `MULTIPATH_MARK` mangle chain (CONNMARK based), and default route, then installs `MASQUERADE` and TTL / Hop-Limit normalization on every *configured* uplink (also inactive ones, so a reconnecting USB tether is covered immediately). Persists the uplink state for `monitor-uplink.sh`. |
 | [`setup-tproxy.sh`](setup-tproxy.sh) | Installs the Mihomo / Clash transparent-proxy chain (`MIHOMO_TPROXY` in `mangle`) plus a LAN-scoped DNS REDIRECT in `nat`. **Docker-safe** (see below). |
-| [`monitor-uplink.sh`](monitor-uplink.sh) | Periodic health-check that reapplies multipath + TProxy *exactly once* per run when either: (a) a routing table looks broken, or (b) the uplink state machine transitions (`BOTH` / `IF1_ONLY` / `IF2_ONLY` / `NONE`). |
-| [`monitor-traffic-limit.sh`](monitor-traffic-limit.sh) | Per-interface monthly traffic cap. Uses `vnstat` (JSON, or `--oneline` month total) when available, falls back to `/sys/class/net/*/statistics`. Hard-blocks forwarding when the cap is hit; optional alert script is called as `<script> <WARNING\|BLOCK> <iface> <usage_gb> <limit_gb>`. |
+| [`monitor-uplink.sh`](monitor-uplink.sh) | Periodic health-check that reapplies multipath + TProxy *exactly once* per run when either: (a) a routing table looks broken, or (b) the probed uplink state (`BOTH` / `IF1_ONLY` / `IF2_ONLY` / `NONE`) differs from the one `setup-multipath.sh` last recorded. A failed restart leaves the recorded state untouched, so it is retried on the next run. |
+| [`monitor-traffic-limit.sh`](monitor-traffic-limit.sh) | Per-interface monthly traffic cap. Uses `vnstat` (JSON, or `--oneline` month total) when available, falls back to `/sys/class/net/*/statistics`. Hard-blocks forwarding (IPv4, plus IPv6 when available) while over the cap, re-asserting the rules on every run so the block survives reboots; optional alert script is called once per transition as `<script> <WARNING\|BLOCK> <iface> <usage_gb> <limit_gb>`. Traffic proxied by Mihomo (router-originated) is **not** blocked. |
 | [`check-balance.sh`](check-balance.sh) | One-shot helper that samples TX/RX counters on two interfaces over N seconds and reports the upload/download split. |
-| [`verify-network.sh`](verify-network.sh) | Run-time verification of multipath default route, policy rules, mangle chains and per-interface internet connectivity. |
-| [`verify-kernel.sh`](verify-kernel.sh) | Parses every `*.conf` under [`../sysctl.d/`](../sysctl.d) and compares each `key = value` against the live `sysctl` value. Reports PASS / FAIL / MISSING with a non-zero exit on any mismatch. |
+| [`verify-network.sh`](verify-network.sh) | Run-time verification of multipath default route, policy rules, mangle chains, TProxy (chain, hook, rule, table — skipped with a warning when TProxy is not installed), TTL rewrite and per-interface internet connectivity. Exits non-zero on any FAIL. |
+| [`verify-kernel.sh`](verify-kernel.sh) | Parses every `*.conf` under [`../sysctl.d/`](../sysctl.d) and compares each `key = value` against the live value in `/proc/sys` (no `sysctl` binary or root needed). Reports PASS / FAIL / MISSING with a non-zero exit on any mismatch, and names other system sysctl.d files that set a mismatched key (`also set in: …`). |
 
 ---
 
@@ -95,7 +95,7 @@ sudo ./setup-tproxy.sh
 
 # Health checks
 sudo ./monitor-uplink.sh                 # safe to run every minute
-./verify-network.sh
+sudo ./verify-network.sh                 # iptables checks need root
 ./verify-kernel.sh
 
 # Diagnostics
@@ -107,7 +107,10 @@ sudo ./monitor-traffic-limit.sh eth1 1000 80 /opt/alert.sh
 
 Both `setup-multipath.sh` and `setup-tproxy.sh` are idempotent — they clean
 up their own previous state before re-installing rules, so they can be
-re-run at any time without leaving stale artifacts.
+re-run at any time without leaving stale artifacts. `setup-tproxy.sh` finds
+its `PREROUTING` jump by target and its DNS `REDIRECT` rules by the
+`faure-tproxy-dns` comment, so changing `LAN_IF` / `LAN_NET` does not leave
+the old rules behind.
 
 If no uplink passes the connectivity probe, `setup-multipath.sh` still keeps
 a default route via the first uplink that has a gateway (and records state
@@ -131,13 +134,15 @@ guarantees are:
 * **Tightly scoped jumps.** TProxy rules in `mangle/PREROUTING` and DNS
   REDIRECT rules in `nat/PREROUTING` are matched by
   `-i $LAN_IF -s $LAN_NET`, so traffic from `docker0` / `br-*` bridges is
-  never hijacked.
+  never hijacked. The DNS rules carry `-m comment --comment faure-tproxy-dns`
+  so cleanup never touches other `REDIRECT` rules.
 * **Append, don't insert.** `setup-tproxy.sh` uses `-A` for its
   `PREROUTING` jump so Docker's `-j DOCKER` evaluates first; only
   LAN-sourced traffic falls through to TProxy.
 * **Bypass list covers Docker subnets.** The TProxy bypass list includes
   `172.16.0.0/12`, which contains the default Docker bridge address space,
-  so container destinations are never marked.
+  so container destinations are never marked. Destinations owned by the
+  router itself (`-m addrtype --dst-type LOCAL`) are bypassed as well.
 * **MASQUERADE coexistence.** `setup-multipath.sh` appends
   `nat/POSTROUTING -o $IFx -j MASQUERADE` rules; these do not overlap with
   Docker's `-s 172.17.0.0/16 ! -o docker0 -j MASQUERADE` rule.
@@ -157,10 +162,13 @@ together at boot:
 
 * `multipath-routing.service` → runs `setup-multipath.sh` after
   `network-online.target`.
-* `tproxy-routing.service` → runs `setup-tproxy.sh` after the Mihomo
-  container/service is healthy.
+* `tproxy-routing.service` → runs `setup-tproxy.sh` after
+  `multipath-routing.service` and `docker.service`; the script itself polls
+  for the Mihomo listeners (up to `TPROXY_WAIT_TIMEOUT`) before touching any
+  firewall state.
 * `monitor-uplink.service` + `monitor-uplink.timer` → periodic health
-  check that calls `monitor-uplink.sh`, which restarts
+  check (the service has no `[Install]` section; only the timer is enabled)
+  that calls `monitor-uplink.sh`, which restarts
   `multipath-routing.service` *exactly once* per run on state change or
   breakage (the restart propagates to `tproxy-routing.service` via
   `Requires=`), then `start`s `tproxy-routing.service` in case it had failed.
