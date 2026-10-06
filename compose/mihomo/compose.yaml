@@ -5,7 +5,8 @@ services:
     environment:
       TZ: "Asia/Shanghai"
     dns:
-      - 172.16.99.99
+      - 223.6.6.6
+      - 223.5.5.5
     volumes:
       - ./data:/etc/mihomo
     tmpfs:
@@ -28,6 +29,22 @@ services:
       timeout: 5s
       retries: 3
       start_period: 30s
+
+  neko-master:
+    image: foru17/neko-master
+    container_name: neko
+    restart: unless-stopped
+    network_mode: host
+    depends_on:
+      - mihomo
+    volumes:
+      - ./data:/app/data
+      - ./geoip:/app/data/geoip:ro
+    environment:
+      - NODE_ENV=production
+      - DB_PATH=/app/data/stats.db
+      - COOKIE_SECRET=b27989cdfe41d501af4d1b83e42d38e3efde1028274801391bafe08317ad955e # openssl rand -hex 32
+      - TZ=Asia/Shanghai
 
   zashboard:
     depends_on:

@@ -2,8 +2,9 @@
 .DS*
 Thumbs.db
 
-compose/adguard/conf/*
-compose/adguard/work/*
-compose/sing-box/config/*.json
-compose/sing-box/var/*
-compose/*/data/*
+compose/adguard/conf
+compose/adguard/work
+compose/sing-box/config
+compose/sing-box/var
+compose/mihomo/geoip
+compose/**/data/*
