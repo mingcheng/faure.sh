@@ -24,6 +24,7 @@ services:
       options:
         max-size: "512m"
     healthcheck:
+      # Must match `external-controller` in data/config.yaml.
       test: ["CMD", "nc", "-z", "172.16.99.99", "9090"]
       interval: 60s
       timeout: 5s
@@ -43,8 +44,15 @@ services:
     environment:
       - NODE_ENV=production
       - DB_PATH=/app/data/stats.db
-      - COOKIE_SECRET=b27989cdfe41d501af4d1b83e42d38e3efde1028274801391bafe08317ad955e # openssl rand -hex 32
       - TZ=Asia/Shanghai
+    # COOKIE_SECRET lives in the untracked neko.env (see neko.env.example).
+    env_file:
+      - path: ./neko.env
+        required: false
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "128m"
 
   zashboard:
     depends_on:

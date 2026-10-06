@@ -13,3 +13,18 @@ This directory contains optional Docker Compose stacks that complement the gatew
 - Adjust DNS, IP addresses, and volume paths in each `compose.yaml` to match your environment before first launch.
 - For TProxy integration, ensure Mihomo is running and reachable before enabling the `tproxy-routing.service` systemd unit.
 - Logs are capped via the `json-file` driver in each stack to avoid filling the disk on long-running gateways.
+
+## Secrets
+
+Credentials are not committed. Stacks that need them read an untracked env file next to `compose.yaml` (ignored via `compose/**/*.env`); copy the `*.env.example` template and fill it in:
+
+| Stack | File | Variables |
+| ----- | ---- | --------- |
+| `mihomo` (neko-master) | `neko.env` | `COOKIE_SECRET` (e.g. `openssl rand -hex 32`) |
+| `pi-hole` | `pihole.env` | `FTLCONF_webserver_api_password` (when unset, Pi-hole generates a random password and prints it in its log) |
+
+```bash
+cd compose/mihomo
+cp neko.env.example neko.env && chmod 600 neko.env
+sed -i "s/change-me/$(openssl rand -hex 32)/" neko.env
+```
