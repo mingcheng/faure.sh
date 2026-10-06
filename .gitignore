@@ -8,3 +8,5 @@ compose/sing-box/config
 compose/sing-box/var
 compose/mihomo/geoip
 compose/**/data/*
+# Per-stack secrets; commit only the *.env.example templates.
+compose/**/*.env
