@@ -11,7 +11,7 @@
 # File Created: 2025-12-27 23:53:23
 #
 # Modified By: mingcheng <mingcheng@apache.org>
-# Last Modified: 2026-10-06 19:30:00
+# Last Modified: 2026-10-28 17:34:53
 ##
 #
 # Read-only report of the live multipath / TProxy / TTL state. Exits 1 when
@@ -73,7 +73,11 @@ check_rule() {
 }
 
 check_rule "$PRIO_MARK1" "Fwmark $MARK1 -> Table $TABLE1"
-check_rule "$PRIO_SRC1" "Source IP1 -> Table $TABLE1"
+if [ -n "$(get_ip "$IF1")" ]; then
+    check_rule "$PRIO_SRC1" "Source IP1 -> Table $TABLE1"
+else
+    log_info "Primary uplink has no IPv4 address; skipping its source rule check."
+fi
 if [ "$HAS_SECONDARY_UPLINK" -eq 1 ]; then
     check_rule "$PRIO_MARK2" "Fwmark $MARK2 -> Table $TABLE2"
     check_rule "$PRIO_SRC2" "Source IP2 -> Table $TABLE2"

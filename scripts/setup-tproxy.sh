@@ -11,7 +11,7 @@
 # File Created: 2025-03-19 14:32:47
 #
 # Modified By: mingcheng <mingcheng@apache.org>
-# Last Modified: 2026-10-06 19:30:00
+# Last Modified: 2026-10-28 17:34:53
 ##
 #
 # Docker compatibility notes:
@@ -33,61 +33,70 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=utils.sh
 source "$SCRIPT_DIR/utils.sh"
 
-# All tunables (incl. TPROXY_WAIT_TIMEOUT / TPROXY_WAIT_INTERVAL) come from
-# config.sh; fail fast if an override blanked a mandatory one.
-: "${LAN_IF:?LAN_IF not set (check config.sh)}"
-: "${LAN_NET:?LAN_NET not set (check config.sh)}"
-: "${TPROXY_PORT:?TPROXY_PORT not set (check config.sh)}"
-
-# --- Pre-flight checks -----------------------------------------------------
-if [ "$(id -u)" -ne 0 ]; then
-    log_error "This script must be run as root."
-    exit 1
-fi
-
-for cmd in iptables ip ss; do
-    if ! command -v "$cmd" >/dev/null 2>&1; then
-        log_error "Command '$cmd' is required but not found."
-        exit 1
+validate_tproxy_config() {
+    local value
+    if [ -z "$LAN_IF" ] || [ -z "$LAN_NET" ]; then
+        log_error "LAN_IF and LAN_NET must be set in the configuration override."
+        return 1
     fi
-done
+    for value in "$TPROXY_PORT" "$TPROXY_DNS_PORT"; do
+        if ! [[ $value =~ ^[1-9][0-9]{0,4}$ ]] || [ "$value" -gt 65535 ]; then
+            log_error "TProxy and DNS ports must be decimal integers in 1..65535 (got '$value')."
+            return 1
+        fi
+    done
+    for value in "$TPROXY_WAIT_TIMEOUT" "$TPROXY_WAIT_INTERVAL"; do
+        if ! [[ $value =~ ^(0|[1-9][0-9]{0,8})$ ]]; then
+            log_error "TProxy wait settings must be decimal seconds in 0..999999999 (got '$value')."
+            return 1
+        fi
+    done
+    if [ "$TPROXY_WAIT_INTERVAL" -eq 0 ]; then
+        log_error "TPROXY_WAIT_INTERVAL must be greater than zero."
+        return 1
+    fi
+}
 
 # Ensure Mihomo/TProxy listeners exist; otherwise adding redirect rules will
 # blackhole TCP/UDP traffic.
 check_listeners() {
-    local tcp_listen=0 udp_dns_listen=0
-    local interval="$TPROXY_WAIT_INTERVAL"
-    local deadline=$(($(date +%s) + TPROXY_WAIT_TIMEOUT))
-    local now elapsed remaining
+    local started=$SECONDS elapsed remaining delay next_log=0
+    local proto port listeners
+    local -a missing=()
 
-    log_info "Waiting up to ${TPROXY_WAIT_TIMEOUT}s for TProxy listeners (TCP:$TPROXY_PORT, UDP:$TPROXY_DNS_PORT)..."
+    log_info "Waiting up to ${TPROXY_WAIT_TIMEOUT}s for TCP/UDP listeners on TProxy:$TPROXY_PORT and DNS:$TPROXY_DNS_PORT..."
 
     while :; do
-        tcp_listen=$(ss -lnt "sport = :$TPROXY_PORT" | tail -n +2 | wc -l)
-        udp_dns_listen=$(ss -lnu "sport = :$TPROXY_DNS_PORT" | tail -n +2 | wc -l)
+        missing=()
+        for proto in tcp udp; do
+            for port in "$TPROXY_PORT" "$TPROXY_DNS_PORT"; do
+                if ! listeners=$(ss -H -ln"${proto:0:1}" "sport = :$port"); then
+                    log_error "Could not inspect $proto/$port listeners."
+                    return 1
+                fi
+                [ -n "$listeners" ] || missing+=("$proto/$port")
+            done
+        done
 
-        if [ "$tcp_listen" -gt 0 ] && [ "$udp_dns_listen" -gt 0 ]; then
-            log_info "TProxy listeners detected (TCP:$TPROXY_PORT, UDP:$TPROXY_DNS_PORT)."
+        if [ "${#missing[@]}" -eq 0 ]; then
+            log_info "Required TProxy and DNS TCP/UDP listeners detected."
             return 0
         fi
 
-        now=$(date +%s)
-        if [ "$now" -ge "$deadline" ]; then
-            break
+        elapsed=$((SECONDS - started))
+        remaining=$((TPROXY_WAIT_TIMEOUT - elapsed))
+        [ "$remaining" -gt 0 ] || break
+        if [ "$elapsed" -ge "$next_log" ]; then
+            log_info "Still waiting for ${missing[*]}... (${elapsed}s elapsed, ${remaining}s remaining)"
+            next_log=$((elapsed + 10))
         fi
 
-        remaining=$((deadline - now))
-        elapsed=$((TPROXY_WAIT_TIMEOUT - remaining))
-        # Log roughly every 10s instead of every poll to keep journal quiet.
-        if [ $((elapsed % 10)) -lt "$interval" ]; then
-            log_info "Still waiting for listeners... (${elapsed}s elapsed, ${remaining}s remaining; TCP=$tcp_listen UDP=$udp_dns_listen)"
-        fi
-
-        sleep "$interval"
+        delay="$TPROXY_WAIT_INTERVAL"
+        [ "$delay" -le "$remaining" ] || delay="$remaining"
+        sleep "$delay"
     done
 
-    [ "$tcp_listen" -eq 0 ] && log_error "No process listening on TCP/$TPROXY_PORT after ${TPROXY_WAIT_TIMEOUT}s (expected Mihomo TProxy)."
-    [ "$udp_dns_listen" -eq 0 ] && log_warn "No process listening on UDP/$TPROXY_DNS_PORT after ${TPROXY_WAIT_TIMEOUT}s (DNS). DNS redirection will fail."
+    log_error "Missing listeners after ${TPROXY_WAIT_TIMEOUT}s: ${missing[*]}."
     return 1
 }
 
@@ -107,11 +116,12 @@ cleanup_firewall() {
     iptables -t mangle -X "$CHAIN_NAME" 2>/dev/null || true
 
     # Routing rules / table.
+    while ip rule del priority "$PRIO_TPROXY" 2>/dev/null; do :; done
     while ip rule del fwmark "$TPROXY_MARK" lookup "$TPROXY_TABLE" 2>/dev/null; do :; done
     ip route flush table "$TPROXY_TABLE" 2>/dev/null || true
 
     # NAT DNS redirect (scoped, so Docker rules are unaffected).
-    delete_rules iptables nat PREROUTING "--comment ${DNS_RULE_TAG}( |$)"
+    delete_rules iptables nat PREROUTING "--comment \"?${DNS_RULE_TAG}\"?( |$)"
     # Legacy untagged rules from older versions of this script.
     local proto
     for proto in udp tcp; do
@@ -192,6 +202,19 @@ verify_setup() {
 
 # --- Main ------------------------------------------------------------------
 main() {
+    if [ "$(id -u)" -ne 0 ]; then
+        log_error "This script must be run as root."
+        return 1
+    fi
+    local cmd
+    for cmd in iptables ip ss; do
+        if ! command -v "$cmd" >/dev/null 2>&1; then
+            log_error "Command '$cmd' is required but not found."
+            return 1
+        fi
+    done
+    validate_tproxy_config || return 1
+
     log_info "Starting TPROXY setup..."
     log_info "Configuration:"
     echo "  LAN Network:    $LAN_NET"
@@ -218,4 +241,6 @@ main() {
     verify_setup
 }
 
-main
+if [[ ${BASH_SOURCE[0]} == "$0" ]]; then
+    main
+fi

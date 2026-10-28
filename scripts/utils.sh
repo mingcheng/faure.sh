@@ -11,7 +11,7 @@
 # File Created: 2025-12-31 10:33:40
 #
 # Modified By: mingcheng <mingcheng@apache.org>
-# Last Modified: 2026-10-06 19:30:00
+# Last Modified: 2026-10-28 17:34:53
 ##
 
 # Source configuration (defaults + optional /etc/faure override).
@@ -88,26 +88,27 @@ get_subnet() {
 }
 
 # Print the gateway for an interface. Sources, in order of preference:
-#   1. the default route already installed in <table_id> (if still reachable)
-#   2. the main table's "default via" route on <interface> (DHCP / netplan)
+#   1. the main table's "default via" route (prefer DHCP / netplan updates)
+#   2. the default route already installed in <table_id> (if still reachable)
 #   3. heuristic: the ".1" host of the on-link subnet (typical /24 tethering)
 #   4. IF1_GW_FALLBACK, only for $IF1 (empty disables)
 # Usage: get_gateway <interface> [table_id]
 get_gateway() {
     local iface=$1 table=${2:-} gw="" subnet
 
-    if [ -n "$table" ]; then
-        gw=$(ip -4 route show table "$table" default 2>/dev/null \
+    gw=$(ip -4 route show default dev "$iface" 2>/dev/null \
+        | awk '$1 == "default" && $2 == "via" && !/linkdown/ {
+            if ($0 ~ / proto (dhcp|static)( |$)/) { preferred = $3; exit }
+            if (gateway == "") gateway = $3
+        } END { print (preferred != "" ? preferred : gateway) }' || true)
+
+    if [ -z "$gw" ] && [ -n "$table" ]; then
+        gw=$(ip -4 route show table "$table" default dev "$iface" 2>/dev/null \
             | awk '$2 == "via" { print $3; exit }' || true)
         # Drop a stale gateway that is no longer on-link for $iface.
         if [ -n "$gw" ] && ! ip route get "$gw" dev "$iface" >/dev/null 2>&1; then
             gw=""
         fi
-    fi
-
-    if [ -z "$gw" ]; then
-        gw=$(ip -4 route show default dev "$iface" 2>/dev/null \
-            | awk '$2 == "via" { print $3; exit }' || true)
     fi
 
     if [ -z "$gw" ]; then
@@ -128,37 +129,48 @@ get_gateway() {
 # Probe Internet reachability through a specific uplink.
 # Usage: check_connectivity <interface> <gateway> [timeout]
 #
-# Each target is temporarily pinned to <gateway> via <interface> in the main
-# table, then probed with ICMP; if ICMP fails (cellular carriers often drop
-# it), a TCP/443 handshake is tried instead. Returns 0 on the first success.
-check_connectivity() {
+# Probe routes are added, never replaced, and only routes we created are
+# removed. A subshell keeps the cleanup traps local to this probe.
+check_connectivity() (
     local iface=$1 gw=${2:-} timeout=${3:-2}
     local targets=("223.5.5.5" "119.29.29.29")
-    local target ok
+    local target pinned=""
+
+    cleanup_probe_route() {
+        [ -n "$pinned" ] || return 0
+        if ! ip -4 route del "$pinned/32" via "$gw" dev "$iface" metric 0; then
+            log_warn "Failed to remove probe route for $pinned on $iface."
+            return 1
+        fi
+        pinned=""
+    }
+
+    trap 'cleanup_probe_route || exit 1' EXIT
+    trap 'exit 1' HUP INT TERM
 
     ip link show "$iface" >/dev/null 2>&1 || return 1
 
     for target in "${targets[@]}"; do
-        ok=1
         if [ -n "$gw" ]; then
-            ip route replace "$target" via "$gw" dev "$iface" 2>/dev/null || true
+            if ip -4 route add "$target/32" via "$gw" dev "$iface" metric 0 2>/dev/null; then
+                pinned="$target"
+            else
+                log_warn "Cannot add probe route for $target on $iface; using interface-bound ICMP only."
+            fi
         fi
 
         if ping -I "$iface" -c 1 -W "$timeout" "$target" >/dev/null 2>&1; then
-            ok=0
+            return 0
         # /dev/tcp cannot bind to a device; only trust it when the pinned
         # route above guarantees the SYN leaves via $iface.
-        elif [ -n "$gw" ] && timeout "$timeout" bash -c "exec 9<>/dev/tcp/$target/443" 2>/dev/null; then
-            ok=0
+        elif [ -n "$pinned" ] && timeout "$timeout" bash -c 'exec 9<>/dev/tcp/$1/443' bash "$target" 2>/dev/null; then
+            return 0
         fi
 
-        if [ -n "$gw" ]; then
-            ip route del "$target" via "$gw" dev "$iface" 2>/dev/null || true
-        fi
-        [ "$ok" -eq 0 ] && return 0
+        cleanup_probe_route || return 1
     done
     return 1
-}
+)
 
 # Block until ANY of the given interfaces has an IPv4 address.
 # Usage: wait_for_ip <max_retries> <retry_delay> <interface>...
@@ -204,20 +216,56 @@ find_rules() {
     "$cmd" -t "$table" -S "$chain" 2>/dev/null | grep -E -- "$regex" || true
 }
 
-# Delete every rule of <table>/<chain> matching <ERE>. Matching on the live
-# rule text lets cleanup remove rules created with older settings (e.g. a
-# previous LAN_IF). Rules must not contain quoted arguments with spaces.
+# Parse iptables' double-quoted/escaped `-S` arguments without evaluating
+# shell syntax. Delete exact rules, not indices that concurrent inserts
+# (e.g. Docker) could shift between listing and deletion.
 # Usage: delete_rules <iptables|ip6tables> <table> <chain> <regex>
 delete_rules() {
-    local cmd=$1 table=$2 chain=$3 regex=$4 line
-    local -a rule
-    # Snapshot first, then delete, so we never mutate while listing.
+    local cmd=$1 table=$2 chain=$3 regex=$4 line rules char word index
+    local quoted escaped started
+    local -a rule=()
+    command -v "$cmd" >/dev/null 2>&1 || return 0
+    if ! rules=$("$cmd" -t "$table" -S "$chain"); then
+        log_error "Cannot list $cmd rules in $table/$chain."
+        return 1
+    fi
+
     while IFS= read -r line; do
-        [ -n "$line" ] || continue
-        read -ra rule <<<"$line"
+        [[ $line == "-A $chain "* && $line =~ $regex ]] || continue
+        rule=()
+        word="" quoted=0 escaped=0 started=0
+        for ((index = 0; index < ${#line}; index++)); do
+            char=${line:index:1}
+            if [ "$escaped" -eq 1 ]; then
+                word+="$char"
+                escaped=0
+            elif [ "$char" = '\' ]; then
+                escaped=1
+                started=1
+            elif [ "$char" = '"' ]; then
+                quoted=$((1 - quoted))
+                started=1
+            elif [ "$quoted" -eq 0 ] && [[ $char == ' ' || $char == $'\t' ]]; then
+                if [ "$started" -eq 1 ]; then
+                    rule+=("$word")
+                    word="" started=0
+                fi
+            else
+                word+="$char"
+                started=1
+            fi
+        done
+        if [ "$quoted" -ne 0 ] || [ "$escaped" -ne 0 ]; then
+            log_error "Cannot parse quoted rule from $cmd $table/$chain."
+            return 1
+        fi
+        [ "$started" -eq 0 ] || rule+=("$word")
         rule[0]="-D"
-        "$cmd" -t "$table" "${rule[@]}" 2>/dev/null || true
-    done <<<"$(find_rules "$cmd" "$table" "$chain" "$regex")"
+        if ! "$cmd" -t "$table" "${rule[@]}"; then
+            log_error "Cannot delete matching rule from $cmd $table/$chain."
+            return 1
+        fi
+    done <<<"$rules"
 }
 
 # --- Tethering / Hotspot detection bypass ---------------------------------
@@ -267,8 +315,9 @@ egress_rewrite_regex() {
 clear_ttl_bypass() {
     local iface=${1:-}
     [ -n "$iface" ] || return 0
-    delete_rules iptables mangle POSTROUTING "$(egress_rewrite_regex TTL "$iface")"
-    delete_rules ip6tables mangle POSTROUTING "$(egress_rewrite_regex HL "$iface")"
+    delete_rules iptables mangle POSTROUTING "$(egress_rewrite_regex TTL "$iface")" || return 1
+    delete_rules ip6tables mangle POSTROUTING "$(egress_rewrite_regex HL "$iface")" 2>/dev/null \
+        || log_warn "Could not clear IPv6 Hop-Limit rules on $iface."
 }
 
 # Apply (or, if disabled, just clean up) the TTL/HL rewrite on a WAN iface.
@@ -278,7 +327,7 @@ apply_ttl_bypass() {
     [ -n "$iface" ] || return 0
 
     # Always clear first so toggling the feature off removes the rules.
-    clear_ttl_bypass "$iface"
+    clear_ttl_bypass "$iface" || return 1
 
     if ! ttl_bypass_enabled; then
         log_info "TTL bypass disabled; skipping $iface."

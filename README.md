@@ -20,7 +20,7 @@
 
 ### Prerequisites
 
-* A fresh Debian-based system (Debian 11+ / Ubuntu 22.04+). RHEL family is not tested.
+* A Debian-based system (Debian 11+ / Ubuntu 22.04+) running systemd. RHEL family is not tested.
 * Root privileges (the installer must be run with `sudo` or as `root`).
 * Outbound Internet connectivity for the package install step.
 * One or two network interfaces. Dual-WAN uses `eth0` (LAN/WAN1) + `eth1` (USB tether / WAN2); one-NIC side-router deployments can use only `eth0`.
@@ -28,7 +28,7 @@
 
 ### Step 1 — Clone the repository
 
-By convention the project lives at `/root/faure.sh`. Any other location works too: the installer defaults to its own directory (or the path given as its first argument) and rewrites the systemd unit paths accordingly.
+By convention the project lives at `/root/faure.sh`. Other locations, including paths containing spaces, work too: the installer defaults to its own directory (or the path given as its first argument) and quotes/escapes the systemd executable paths accordingly.
 
 ```bash
 sudo git clone https://github.com/mingcheng/faure.sh.git /root/faure.sh
@@ -37,7 +37,7 @@ cd /root/faure.sh
 
 ### Step 2 — Run the installer
 
-The installer is idempotent — re-running it will refresh sysctl/systemd files but **will not** overwrite your local override at `/etc/faure/config.sh`.
+The installer is idempotent — re-running it will refresh sysctl/systemd files but **will not** overwrite your local override at `/etc/faure/config.sh`. It checks the platform, package manager, systemd access and required project files before installing packages, and exits non-zero if installation fails.
 
 ```bash
 sudo ./install.sh
@@ -125,7 +125,7 @@ ip -br addr show
 
 ### Step 5 — (Optional) Bring up your TProxy backend
 
-`setup-tproxy.sh` waits up to `TPROXY_WAIT_TIMEOUT` (default 300 s) for a listener on `TPROXY_PORT/tcp` and `TPROXY_DNS_PORT/udp` (default 53). Make sure your proxy (Clash/Mihomo) is running first. The [compose/](compose/) directory contains ready-to-use Docker Compose stacks (see [compose/README.md](compose/README.md) for the untracked `*.env` secret files), e.g.:
+`setup-tproxy.sh` waits up to `TPROXY_WAIT_TIMEOUT` (default 300 s) for **both TCP and UDP** listeners on `TPROXY_PORT` and `TPROXY_DNS_PORT` (default 53). All four listeners are required because the firewall redirects both protocols. Invalid ports or wait settings are rejected before any rules are changed. Make sure your proxy (Clash/Mihomo) is running first. The [compose/](compose/) directory contains ready-to-use Docker Compose stacks (see [compose/README.md](compose/README.md) for the untracked `*.env` secret files), e.g.:
 
 ```bash
 cd compose/mihomo
@@ -157,7 +157,7 @@ sudo ./scripts/verify-network.sh       # routing tables, policy rules, iptables 
 sudo ./scripts/verify-kernel.sh        # cross-checks every key in sysctl.d/ against the live kernel
 ```
 
-You should see `[PASS]` for the default route, the active policy rules, and the `MULTIPATH_MARK` / `MIHOMO_TPROXY` chains. Both verifiers exit non-zero when any check fails. In one-NIC mode the verifier skips `IF2`, `MARK2`, `TABLE2`, and priority `101` checks. TProxy checks are skipped with a `[WARN]` when its chain is absent, but fail if it is only partially installed. In `failover` mode the default route is reported as a single nexthop (no `nexthop` keyword) — that is expected. If `verify-kernel.sh` reports a mismatch with `also set in: …`, another sysctl.d file (e.g. a distribution default) overrides that key.
+You should see `[PASS]` for the default route, the active policy rules, and the `MULTIPATH_MARK` / `MIHOMO_TPROXY` chains. Both verifiers exit non-zero when any check fails. In one-NIC mode the verifier skips `IF2`, `MARK2`, `TABLE2`, and priority `101` checks. When only `IF2` has an IPv4 address, the absent `IF1` source rule is also skipped. TProxy checks are skipped with a `[WARN]` when its chain is absent, but fail if it is only partially installed. In `failover` mode the default route is reported as a single nexthop (no `nexthop` keyword) — that is expected. If `verify-kernel.sh` reports a mismatch with `also set in: …`, another sysctl.d file (e.g. a distribution default) overrides that key.
 
 ### Step 8 — (Optional) Limit traffic on a metered link
 
@@ -189,9 +189,9 @@ The following diagram illustrates how `monitor-uplink.sh` maintains connectivity
 
 ```mermaid
 graph TD
-    Start[Timer Trigger] --> SanityCheck["Sanity check routing tables<br/>(needs_restore IF1 / IF2)"]
+    Start[Timer Trigger] --> SanityCheck["Check routing tables, current IPs/gateways<br/>and main default route"]
     SanityCheck -- Broken --> MarkRestart[Mark restart reason]
-    SanityCheck -- OK --> CheckConn["Check Connectivity (Ping per uplink)"]
+    SanityCheck -- OK --> CheckConn["Check connectivity per uplink<br/>(ICMP, then TCP when a probe route was added)"]
     MarkRestart --> CheckConn
 
     CheckConn -- Both UP --> StateBoth[State: BOTH]
@@ -209,12 +209,16 @@ graph TD
     MarkChanged --> Decide
 
     Decide -- Yes --> UpdateRoute["Restart multipath-routing.service<br/>(setup-multipath.sh persists the new state)"]
-    Decide -- No --> End[End]
-    UpdateRoute --> UpdateTProxy["tproxy-routing.service<br/>(restarted via Requires=, started if failed)"]
+    Decide -- No --> CheckTProxy{TProxy enabled but inactive?}
+    UpdateRoute --> CheckTProxy
+    CheckTProxy -- Yes --> UpdateTProxy["Start tproxy-routing.service"]
+    CheckTProxy -- No --> End[End]
     UpdateTProxy --> End
 ```
 
-The state file is written only by `setup-multipath.sh` after it applies routing, so a failed restart is retried on the next timer run.
+The state file is written only by `setup-multipath.sh` after it applies routing, so a failed restart is retried on the next timer run. An enabled TProxy service is retried even when uplink state is unchanged; disabled or masked TProxy units are left alone. Service failures make the monitor exit non-zero instead of reporting success.
+
+Health probes never replace existing host routes. Temporary routes are removed on completion or catchable termination, and TCP fallback is used only when the probe successfully added its own route. Gateway discovery prefers fresh DHCP/netplan defaults over cached per-uplink tables.
 
 ## 📂 Core Components
 
@@ -228,14 +232,14 @@ The state file is written only by `setup-multipath.sh` after it applies routing,
 
 ## 🛠 Troubleshooting
 
-| Symptom                                             | First thing to check                                                                                                                                                    |
-| --------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `multipath-routing.service` fails at boot           | `journalctl -u multipath-routing.service` — usually `IF1`/`IF2` did not get an IP within the 60 s wait window. Verify netplan / DHCP.                                   |
-| `tproxy-routing.service` fails to start             | The script aborts (without touching firewall state) if no listener is found on `TPROXY_PORT/tcp` and `TPROXY_DNS_PORT/udp` within `TPROXY_WAIT_TIMEOUT`. Start your Clash/Mihomo container first; `monitor-uplink` retries it on the next state change. |
-| Default route disappears after USB modem reconnects | The `monitor-uplink.timer` should restore it within 5 min. Trigger it immediately with `sudo systemctl start monitor-uplink.service`.                                   |
-| Carrier still throttles tethered traffic            | Verify the egress rule with `sudo iptables -t mangle -S POSTROUTING \| grep TTL` and `sudo ip6tables -t mangle -S POSTROUTING \| grep HL`. Try `TTL_BYPASS_VALUE=64` (some carriers expect the iOS profile). Confirm with `tcpdump -i <wan> -n -v 'ip[8]=<value>'`. |
-| Override file is being ignored                      | Confirm the path is one of `$FAURE_CONFIG`, `/etc/faure/config.sh`, `/etc/default/faure` and that it `export`s the variables. Run `bash -x scripts/config.sh` to trace. |
-| Need to roll back routing changes                   | `sudo systemctl stop tproxy-routing.service multipath-routing.service` and reboot, or flush manually with `ip route flush table 100 && ip route flush table 101`.       |
+| Symptom                                             | First thing to check                                                                                                                                                                                                                                                                               |
+| --------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `multipath-routing.service` fails at boot           | `journalctl -u multipath-routing.service` — usually `IF1`/`IF2` did not get an IP within the 60 s wait window. Verify netplan / DHCP.                                                                                                                                                              |
+| `tproxy-routing.service` fails to start             | The script aborts without touching firewall state unless both `TPROXY_PORT` and `TPROXY_DNS_PORT` have TCP and UDP listeners within `TPROXY_WAIT_TIMEOUT`. Start your Clash/Mihomo container first; `monitor-uplink` retries an enabled service on every timer run, even without an uplink change. |
+| Default route disappears after USB modem reconnects | The `monitor-uplink.timer` should restore it within 5 min. Trigger it immediately with `sudo systemctl start monitor-uplink.service`.                                                                                                                                                              |
+| Carrier still throttles tethered traffic            | Verify the egress rule with `sudo iptables -t mangle -S POSTROUTING \| grep TTL` and `sudo ip6tables -t mangle -S POSTROUTING \| grep HL`. Try `TTL_BYPASS_VALUE=64` (some carriers expect the iOS profile). Confirm with `tcpdump -i <wan> -n -v 'ip[8]=<value>'`.                                |
+| Override file is being ignored                      | Confirm the path is one of `$FAURE_CONFIG`, `/etc/faure/config.sh`, `/etc/default/faure` and that it `export`s the variables. Run `bash -x scripts/config.sh` to trace.                                                                                                                            |
+| Need to roll back routing changes                   | `sudo systemctl stop tproxy-routing.service multipath-routing.service` and reboot, or flush manually with `ip route flush table 100 && ip route flush table 101`.                                                                                                                                  |
 
 ## License
 

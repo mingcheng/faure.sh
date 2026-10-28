@@ -12,17 +12,17 @@ directly from the command line or from `systemd` units shipped under
 
 ## File Layout
 
-| File | Purpose |
-|------|---------|
-| [`config.sh`](config.sh) | Single source of truth for **all** tunables (interfaces, networks, route tables, fwmarks, TProxy port, etc.). Sourced by every other script via `utils.sh`. |
-| [`utils.sh`](utils.sh) | Shared logging (`log_info` / `log_warn` / `log_error`; `use_report_logging` switches the verifiers to `[PASS]` / `[FAIL]` labels; colors only on a TTY and never with `NO_COLOR`), network helpers (`get_ip`, `get_subnet`, `get_gateway`, `check_connectivity`, `wait_for_ip`, `secondary_uplink_configured`, `secondary_uplink_enabled`, `uplink_state`), iptables rule helpers (`find_rules` / `delete_rules`, matching on the live `-S` output) and the per-uplink TTL / Hop-Limit normalizer (`apply_ttl_bypass` / `clear_ttl_bypass` / `ttl_bypass_enabled` / `egress_rewrite_rules`). Sources `config.sh` automatically. |
-| [`setup-multipath.sh`](setup-multipath.sh) | Builds the dual-uplink load-balancing routing tables, policy rules, `MULTIPATH_MARK` mangle chain (CONNMARK based), and default route, then installs `MASQUERADE` and TTL / Hop-Limit normalization on every *configured* uplink (also inactive ones, so a reconnecting USB tether is covered immediately). Persists the uplink state for `monitor-uplink.sh`. |
-| [`setup-tproxy.sh`](setup-tproxy.sh) | Installs the Mihomo / Clash transparent-proxy chain (`MIHOMO_TPROXY` in `mangle`) plus a LAN-scoped DNS REDIRECT in `nat`. **Docker-safe** (see below). |
-| [`monitor-uplink.sh`](monitor-uplink.sh) | Periodic health-check that reapplies multipath + TProxy *exactly once* per run when either: (a) a routing table looks broken, or (b) the probed uplink state (`BOTH` / `IF1_ONLY` / `IF2_ONLY` / `NONE`) differs from the one `setup-multipath.sh` last recorded. A failed restart leaves the recorded state untouched, so it is retried on the next run. |
-| [`monitor-traffic-limit.sh`](monitor-traffic-limit.sh) | Per-interface monthly traffic cap. Uses `vnstat` (JSON, or `--oneline` month total) when available, falls back to `/sys/class/net/*/statistics`. Hard-blocks forwarding (IPv4, plus IPv6 when available) while over the cap, re-asserting the rules on every run so the block survives reboots; optional alert script is called once per transition as `<script> <WARNING\|BLOCK> <iface> <usage_gb> <limit_gb>`. Traffic proxied by Mihomo (router-originated) is **not** blocked. |
-| [`check-balance.sh`](check-balance.sh) | One-shot helper that samples TX/RX counters on two interfaces over N seconds and reports the upload/download split. |
-| [`verify-network.sh`](verify-network.sh) | Run-time verification of multipath default route, policy rules, mangle chains, TProxy (chain, hook, rule, table — skipped with a warning when TProxy is not installed), TTL rewrite and per-interface internet connectivity. Exits non-zero on any FAIL. |
-| [`verify-kernel.sh`](verify-kernel.sh) | Parses every `*.conf` under [`../sysctl.d/`](../sysctl.d) and compares each `key = value` against the live value in `/proc/sys` (no `sysctl` binary or root needed). Reports PASS / FAIL / MISSING with a non-zero exit on any mismatch, and names other system sysctl.d files that set a mismatched key (`also set in: …`). |
+| File                                                   | Purpose                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| ------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| [`config.sh`](config.sh)                               | Single source of truth for **all** tunables (interfaces, networks, route tables, fwmarks, TProxy port, etc.). Sourced by every other script via `utils.sh`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| [`utils.sh`](utils.sh)                                 | Shared logging (`log_info` / `log_warn` / `log_error`; `use_report_logging` switches the verifiers to `[PASS]` / `[FAIL]` labels; colors only on a TTY and never with `NO_COLOR`), network helpers (`get_ip`, `get_subnet`, `get_gateway`, `check_connectivity`, `wait_for_ip`, `secondary_uplink_configured`, `secondary_uplink_enabled`, `uplink_state`), iptables rule helpers (`find_rules` / `delete_rules`, parsing quoted/escaped `-S` arguments and deleting exact rules rather than shifting indices) and the per-uplink TTL / Hop-Limit normalizer (`apply_ttl_bypass` / `clear_ttl_bypass` / `ttl_bypass_enabled` / `egress_rewrite_rules`). Sources `config.sh` automatically. |
+| [`setup-multipath.sh`](setup-multipath.sh)             | Builds the dual-uplink load-balancing routing tables, policy rules, `MULTIPATH_MARK` mangle chain (CONNMARK based), and default route, then installs `MASQUERADE` and TTL / Hop-Limit normalization on every *configured* uplink (also inactive ones, so a reconnecting USB tether is covered immediately). Persists the uplink state for `monitor-uplink.sh`.                                                                                                                                                                                                                                                                                                                             |
+| [`setup-tproxy.sh`](setup-tproxy.sh)                   | Installs the Mihomo / Clash transparent-proxy chain (`MIHOMO_TPROXY` in `mangle`) plus a LAN-scoped DNS REDIRECT in `nat`. **Docker-safe** (see below).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| [`monitor-uplink.sh`](monitor-uplink.sh)               | Reapplies multipath at most once per run when a routing table/default route is missing, an interface's IP/gateway changed, or the probed state (`BOTH` / `IF1_ONLY` / `IF2_ONLY` / `NONE`) differs from the last successful setup. Independently retries an enabled but inactive TProxy service, even with unchanged uplinks; leaves disabled/masked units alone. Service failures produce a non-zero exit status.                                                                                                                                                                                                                                                                         |
+| [`monitor-traffic-limit.sh`](monitor-traffic-limit.sh) | Per-interface monthly traffic cap. Uses `vnstat` (JSON, or `--oneline` month total) when available, falls back to `/sys/class/net/*/statistics`. Hard-blocks forwarding (IPv4, plus IPv6 when available) while over the cap, re-asserting the rules on every run so the block survives reboots; optional alert script is called once per transition as `<script> <WARNING\|BLOCK> <iface> <usage_gb> <limit_gb>`. Traffic proxied by Mihomo (router-originated) is **not** blocked.                                                                                                                                                                                                        |
+| [`check-balance.sh`](check-balance.sh)                 | One-shot helper that samples TX/RX counters on two interfaces over N seconds and reports the upload/download split.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| [`verify-network.sh`](verify-network.sh)               | Run-time verification of multipath default route, policy rules, mangle chains, TProxy (chain, hook, rule, table — skipped with a warning when TProxy is not installed), TTL rewrite and per-interface internet connectivity. Exits non-zero on any FAIL.                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| [`verify-kernel.sh`](verify-kernel.sh)                 | Parses every `*.conf` under [`../sysctl.d/`](../sysctl.d) and compares each `key = value` against the live value in `/proc/sys` (no `sysctl` binary or root needed). Reports PASS / FAIL / MISSING with a non-zero exit on any mismatch, and names other system sysctl.d files that set a mismatched key (`also set in: …`).                                                                                                                                                                                                                                                                                                                                                               |
 
 ---
 
@@ -61,28 +61,28 @@ export LAN_NET="192.168.1.0/24"
 
 Variables of note:
 
-| Variable | Default | Used by |
-|----------|---------|---------|
-| `IF1`, `IF2` | `eth0`, `eth1` | All multipath / verification scripts; set `IF2=""` or `IF2="$IF1"` for one-NIC side-router mode |
-| `LAN_IF` | `$IF1` | `setup-tproxy.sh` (LAN-facing NIC) |
-| `LAN_NET` | `192.168.1.0/24` | TProxy + multipath bypass |
-| `TABLE1`, `TABLE2` | `100`, `101` | Multipath routing tables |
-| `MARK1`, `MARK2` | `0x100`, `0x200` | Multipath fwmarks |
-| `WEIGHT1`, `WEIGHT2` | `1`, `1` | Per-uplink ECMP weights (only used when `MULTIPATH_MODE=balance` and both uplinks are UP) |
-| `MULTIPATH_MODE` | `balance` | `balance` = weighted ECMP; `failover` = active/standby. Only takes effect when **both** uplinks are UP — single-uplink scenarios always use the lone available uplink. |
-| `PRIMARY_IF` | `IF1` | Which logical interface is primary in `failover` mode (`IF1` or `IF2`) |
-| `TPROXY_PORT` | `8848` | Mihomo TProxy listener |
-| `TPROXY_DNS_PORT` | `53` | Local DNS port for REDIRECT target |
-| `TPROXY_WAIT_TIMEOUT` | `300` | Seconds `setup-tproxy.sh` waits for the Mihomo listeners before aborting (keep below `TimeoutStartSec=360` of `tproxy-routing.service`) |
-| `TPROXY_WAIT_INTERVAL` | `2` | Listener poll interval in seconds |
-| `TPROXY_TABLE` | `200` | TProxy routing table |
-| `TPROXY_MARK` | `0x1` | TProxy fwmark |
-| `CHAIN_NAME` | `MIHOMO_TPROXY` | TProxy mangle chain |
-| `IF1_GW_FALLBACK` | `172.16.1.1` | Last-resort gateway when DHCP/route detection fails on `IF1`; set empty to disable |
-| `PRIO_MARK1`, `PRIO_MARK2`, `PRIO_TPROXY`, `PRIO_SRC1`, `PRIO_SRC2` | `90`, `91`, `99`, `100`, `101` | `ip rule` priorities (fwmark, TProxy and source-based rules) |
-| `UPLINK_STATE_FILE` | `/run/uplink_status` | State persistence for `monitor-uplink.sh` |
-| `TTL_BYPASS_ENABLED` | `1` | Master switch for the WAN-egress TTL / IPv6 Hop-Limit rewrite (tethering-detection bypass). Set to `0` to disable. |
-| `TTL_BYPASS_VALUE` | `65` | Egress TTL / Hop-Limit value (1..255). `65` mimics a phone forwarding tethered traffic; `64` mimics direct phone egress. |
+| Variable                                                            | Default                        | Used by                                                                                                                                                                |
+| ------------------------------------------------------------------- | ------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `IF1`, `IF2`                                                        | `eth0`, `eth1`                 | All multipath / verification scripts; set `IF2=""` or `IF2="$IF1"` for one-NIC side-router mode                                                                        |
+| `LAN_IF`                                                            | `$IF1`                         | `setup-tproxy.sh` (LAN-facing NIC)                                                                                                                                     |
+| `LAN_NET`                                                           | `192.168.1.0/24`               | TProxy + multipath bypass                                                                                                                                              |
+| `TABLE1`, `TABLE2`                                                  | `100`, `101`                   | Multipath routing tables                                                                                                                                               |
+| `MARK1`, `MARK2`                                                    | `0x100`, `0x200`               | Multipath fwmarks                                                                                                                                                      |
+| `WEIGHT1`, `WEIGHT2`                                                | `1`, `1`                       | Per-uplink ECMP weights (only used when `MULTIPATH_MODE=balance` and both uplinks are UP)                                                                              |
+| `MULTIPATH_MODE`                                                    | `balance`                      | `balance` = weighted ECMP; `failover` = active/standby. Only takes effect when **both** uplinks are UP — single-uplink scenarios always use the lone available uplink. |
+| `PRIMARY_IF`                                                        | `IF1`                          | Which logical interface is primary in `failover` mode (`IF1` or `IF2`)                                                                                                 |
+| `TPROXY_PORT`                                                       | `8848`                         | Mihomo TProxy port; TCP and UDP listeners required; decimal integer in 1..65535                                                                                        |
+| `TPROXY_DNS_PORT`                                                   | `53`                           | Local DNS REDIRECT port; TCP and UDP listeners required; decimal integer in 1..65535                                                                                   |
+| `TPROXY_WAIT_TIMEOUT`                                               | `300`                          | Non-negative integer seconds to wait for all four listeners; `0` checks once without waiting (keep below `TimeoutStartSec=360` of `tproxy-routing.service`)            |
+| `TPROXY_WAIT_INTERVAL`                                              | `2`                            | Positive integer poll interval in seconds; the final sleep is capped by the remaining timeout                                                                          |
+| `TPROXY_TABLE`                                                      | `200`                          | TProxy routing table                                                                                                                                                   |
+| `TPROXY_MARK`                                                       | `0x1`                          | TProxy fwmark                                                                                                                                                          |
+| `CHAIN_NAME`                                                        | `MIHOMO_TPROXY`                | TProxy mangle chain                                                                                                                                                    |
+| `IF1_GW_FALLBACK`                                                   | `172.16.1.1`                   | Last-resort gateway when DHCP/route detection fails on `IF1`; set empty to disable                                                                                     |
+| `PRIO_MARK1`, `PRIO_MARK2`, `PRIO_TPROXY`, `PRIO_SRC1`, `PRIO_SRC2` | `90`, `91`, `99`, `100`, `101` | `ip rule` priorities (fwmark, TProxy and source-based rules)                                                                                                           |
+| `UPLINK_STATE_FILE`                                                 | `/run/uplink_status`           | State persistence for `monitor-uplink.sh`                                                                                                                              |
+| `TTL_BYPASS_ENABLED`                                                | `1`                            | Master switch for the WAN-egress TTL / IPv6 Hop-Limit rewrite (tethering-detection bypass). Set to `0` to disable.                                                     |
+| `TTL_BYPASS_VALUE`                                                  | `65`                           | Egress TTL / Hop-Limit value (1..255). `65` mimics a phone forwarding tethered traffic; `64` mimics direct phone egress.                                               |
 
 ---
 
@@ -112,9 +112,18 @@ its `PREROUTING` jump by target and its DNS `REDIRECT` rules by the
 `faure-tproxy-dns` comment, so changing `LAN_IF` / `LAN_NET` does not leave
 the old rules behind.
 
+Gateway discovery prefers main-table DHCP/netplan defaults over cached
+per-uplink routes, so a lease renewal can change the gateway without being
+hidden by the old table. The monitor also detects stale source addresses.
+Connectivity probes add temporary host routes without replacing existing
+ones and remove only the routes they created, including on catchable
+termination. If a probe route cannot be added, only interface-bound ICMP
+is used; the unbound TCP fallback is skipped.
+
 If no uplink passes the connectivity probe, `setup-multipath.sh` still keeps
 a default route via the first uplink that has a gateway (and records state
-`NONE`), so a probe false-negative never black-holes the LAN.
+`NONE`), so a probe false-negative never black-holes the LAN. If neither
+uplink has a gateway, setup fails before flushing any routing tables.
 
 ---
 
@@ -169,8 +178,24 @@ together at boot:
 * `monitor-uplink.service` + `monitor-uplink.timer` → periodic health
   check (the service has no `[Install]` section; only the timer is enabled)
   that calls `monitor-uplink.sh`, which restarts
-  `multipath-routing.service` *exactly once* per run on state change or
-  breakage (the restart propagates to `tproxy-routing.service` via
-  `Requires=`), then `start`s `tproxy-routing.service` in case it had failed.
+  `multipath-routing.service` at most once per run on state change or
+  breakage, then ensures an enabled TProxy service is active. TProxy
+  startup failures are also retried on runs without a routing change;
+  disabled or masked units are not automatically started.
 * `install.sh` rewrites the `/root/faure.sh` paths in the units to the
-  actual project directory.
+  actual project directory, escaping spaces and systemd path syntax.
+
+## Safe Regression Checks
+
+From the repository root, run:
+
+```bash
+bash tests/regression.sh
+```
+
+The tests use temporary files and mocked network/systemd commands; they
+source guarded function definitions without invoking the installer or
+setup/monitor entrypoints. They require neither root nor Linux networking
+and run in CI alongside the static checks described in
+[`../AGENTS.md`](../AGENTS.md). They do not replace end-to-end testing in a
+disposable Debian/Ubuntu VM.

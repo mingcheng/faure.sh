@@ -11,7 +11,7 @@
 # File Created: 2025-12-27 23:13:18
 #
 # Modified By: mingcheng <mingcheng@apache.org>
-# Last Modified: 2026-10-06 19:30:00
+# Last Modified: 2026-10-28 17:34:53
 ##
 
 set -o errexit -o nounset -o pipefail
@@ -19,6 +19,11 @@ set -o errexit -o nounset -o pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=utils.sh
 source "$SCRIPT_DIR/utils.sh"
+
+if [ "$(id -u)" -ne 0 ]; then
+    log_error "This script must be run as root."
+    exit 1
+fi
 
 log_info "Configuring multipath routing..."
 
@@ -85,6 +90,11 @@ if [ "$HAS_IF2" -eq 1 ]; then
         log_error "No gateway for $IF2"
         HAS_IF2=0
     fi
+fi
+
+if [ "$HAS_IF1" -eq 0 ] && [ "$HAS_IF2" -eq 0 ]; then
+    log_error "No uplink has a usable gateway. Leaving routing unchanged."
+    exit 1
 fi
 
 # --- Connectivity check ----------------------------------------------------

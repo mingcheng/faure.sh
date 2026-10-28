@@ -9,7 +9,7 @@
 # File Created: 2026-01-14 22:29:32
 #
 # Modified By: mingcheng <mingcheng@apache.org>
-# Last Modified: 2026-10-05 10:00:00
+# Last Modified: 2026-10-28 17:34:53
 #
 # This file ships with sane defaults. To override any value WITHOUT editing
 # this file (recommended for upgrade-friendly deployments), drop a shell
@@ -73,15 +73,16 @@ export PRIMARY_IF="${PRIMARY_IF:-IF1}"
 
 # TProxy Settings
 export TPROXY_PORT="${TPROXY_PORT:-8848}"
-# Local DNS port that mihomo/clash listens on; LAN DNS (port 53) is
+# Local DNS port that mihomo/clash listens on (TCP and UDP); LAN DNS (port 53) is
 # REDIRECTed here. Override to e.g. 1053 only if mihomo binds that port.
 export TPROXY_DNS_PORT="${TPROXY_DNS_PORT:-53}"
 export TPROXY_TABLE="${TPROXY_TABLE:-200}"
 export CHAIN_NAME="${CHAIN_NAME:-MIHOMO_TPROXY}"
-# How long setup-tproxy.sh waits for the Mihomo listeners (seconds). Mihomo
+# How long setup-tproxy.sh waits for both TCP/UDP ports (seconds). Mihomo
 # may need 60s+ to fetch rule providers on a cold start. Keep the timeout
 # below TimeoutStartSec in systemd/tproxy-routing.service (360s).
 export TPROXY_WAIT_TIMEOUT="${TPROXY_WAIT_TIMEOUT:-300}"
+# Must be a positive integer; the final sleep is capped by the timeout.
 export TPROXY_WAIT_INTERVAL="${TPROXY_WAIT_INTERVAL:-2}"
 
 # State File
